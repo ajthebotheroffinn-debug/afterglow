@@ -1,0 +1,62 @@
+name: Build IPA
+
+on:
+  push:
+    branches: [main]
+    paths: ["ios/**", "tools/make_icon.py", ".github/workflows/build-ipa.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the bundled offline copy of the app and the icon
+        run: |
+          python3 tools/build.py
+          python3 -m pip install --quiet --break-system-packages pillow || python3 -m pip install --quiet pillow
+          python3 tools/make_icon.py
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build (unsigned; SideStore and LiveContainer sign it on the phone)
+        working-directory: ios
+        run: |
+          OWNER="$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          REPO="${GITHUB_REPOSITORY#*/}"
+          xcodebuild -project Afterglow.xcodeproj -scheme Afterglow -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            TK_REMOTE_URL="https://$OWNER.github.io/$REPO/" \
+            build | tail -n 60
+          test -d build/Build/Products/Release-iphoneos/Afterglow.app
+
+      - name: Package IPA
+        working-directory: ios
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Afterglow.app Payload/
+          zip -qry ../Afterglow.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Afterglow-ipa
+          path: Afterglow.ipa
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "build-$GITHUB_RUN_NUMBER" Afterglow.ipa \
+            --title "Afterglow (build $GITHUB_RUN_NUMBER)" \
+            --notes "Install with SideStore or LiveContainer. The newest IPA is always at /releases/latest/download/Afterglow.ipa" \
+            --latest
