@@ -1,0 +1,9 @@
+ios/build/
+ios/Payload/
+ios/*.xcodeproj/
+*.ipa
+tools/requests.log
+tools/shot_*.png
+__pycache__/
+ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png
+web/
