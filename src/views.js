@@ -36,6 +36,7 @@ function storyMenu(id) {
   openMenu(h('div', { class: 'menu', role: 'menu', 'aria-label': 'Story options' },
     item(`Reply length: ${lenOf(s).label}`, 'len', () => lengthSheet(id)),
     item(`Text size: ${textSize}`, 'size', () => sizeSheet()),
+    STANDALONE ? item(`Model: ${window.TK_PLATFORM.getConfig().name || 'not set'}`, 'gear', () => modelMenu()) : null,
     item(state.memBusy.has(id) ? 'Memory (updating…)' : 'Memory', 'book', () => memorySheet(id)),
     item('Story settings', 'gear', () => storySheet(id)),
     c ? item(`Edit ${c.name}`, 'edit', () => charSheet(c.id)) : null,
