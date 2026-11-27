@@ -150,7 +150,11 @@ function paintStory() {
   });
   if (state.streaming && state.streaming.id === s.id) {
     const el = h('div', { class: 'msg ai', id: 'stream' });
-    if (state.streaming.text) el.innerHTML = fmtAI(subst(state.streaming.text, s)); else el.append(h('span', { class: 'typing', role: 'status', 'aria-label': 'Writing' }, h('i'), h('i'), h('i')));
+    if (state.streaming.text) el.innerHTML = fmtAI(subst(state.streaming.text, s));
+    else {
+      el.append(h('span', { class: 'typing', role: 'status', 'aria-label': state.streaming.phase === 'checking' ? 'Checking memory' : 'Writing' }, h('i'), h('i'), h('i')));
+      if (state.streaming.phase === 'checking') el.append(h('span', { class: 'thinking', style: 'margin-left:8px;font-size:.85em' }, 'Checking memory…'));
+    }
     const first = !state.streaming.shown; state.streaming.shown = true;
     wrap.append(h('div', { class: 'mrow ai' + (first ? ' enter' : '') }, tile(charName, 'av'), el));
   }
