@@ -9,6 +9,13 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
     private let net = NetClient()
     private var usingFallback = false
     private var scrollTimer: Timer?
+    private let bar = InputBar()
+    private var barActive = false
+    private var lastOverlap: CGFloat = -1
+
+    // While a story is open, the native message box rides on top of the keyboard.
+    override var canBecomeFirstResponder: Bool { barActive }
+    override var inputAccessoryView: UIView? { barActive ? bar : nil }
 
     private var remoteURL: URL? {
         guard let s = Bundle.main.object(forInfoDictionaryKey: "TKRemoteURL") as? String,
@@ -54,6 +61,17 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         ])
 
         net.deliver = { [weak self] js in self?.webView.evaluateJavaScript(js, completionHandler: nil) }
+        bar.onSend = { [weak self] text in
+            guard let self = self else { return }
+            let sending = self.bar.mode != "stop"
+            self.js("window.__tkComposer && window.__tkComposer.press(\(Self.jsString(text)))")
+            if sending { self.bar.clear() }
+        }
+        bar.onFocus = { [weak self] in self?.js("window.__tkComposer && window.__tkComposer.focus()") }
+        bar.onHeightChange = { [weak self] in self?.reportOverlap() }
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(keyboardDidHide), name: UIResponder.keyboardDidHideNotification, object: nil)
+        nc.addObserver(self, selector: #selector(keyboardFrameChanged), name: UIResponder.keyboardDidChangeFrameNotification, object: nil)
         hideInputAccessoryBar()
         loadApp()
 
@@ -76,7 +94,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         ucc.removeAllUserScripts()
         let docs = Store.shared.snapshotJSON()
         let cfg = Store.shared.configJSON() ?? "null"
-        let src = "window.TK_BOOT = \(docs); window.TK_CONFIG = \(cfg.isEmpty ? "null" : cfg); window.TK_NATIVE_SCROLL = true;"
+        let src = "window.TK_BOOT = \(docs); window.TK_CONFIG = \(cfg.isEmpty ? "null" : cfg); window.TK_NATIVE_SCROLL = true; window.TK_NATIVE_COMPOSER = true;"
         ucc.addUserScript(WKUserScript(source: src, injectionTime: .atDocumentStart, forMainFrameOnly: true))
     }
 
@@ -151,14 +169,73 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
             if let h = msg["h"] as? NSNumber, webView.scrollView.responds(to: sel) {
                 webView.scrollView.setValue(CGFloat(h.doubleValue), forKey: "keyboardDismissPadding")
             }
+        case "bar":
+            setBar((msg["show"] as? Bool) ?? false)
+        case "barMode":
+            if let m = msg["mode"] as? String {
+                let empty = (bar.textView.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                bar.mode = m == "stop" ? "stop" : (empty ? "continue" : "go")
+            }
         case "haptic":
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            UIImpactFeedbackGenerator(style: (msg["style"] as? String) == "light" ? .light : .medium).impactOccurred()
         case "reload":
             Store.shared.writeDailyBackup()
             loadApp()
         default:
             break
         }
+    }
+
+    // MARK: native message box
+
+    private func js(_ code: String) { webView.evaluateJavaScript(code, completionHandler: nil) }
+
+    private static func jsString(_ s: String) -> String {
+        guard let d = try? JSONSerialization.data(withJSONObject: s, options: [.fragmentsAllowed]),
+              let q = String(data: d, encoding: .utf8) else { return "\"\"" }
+        return q
+    }
+
+    private func setBar(_ show: Bool) {
+        guard show != barActive else { return }
+        barActive = show
+        if show {
+            becomeFirstResponder()
+            reloadInputViews()
+        } else {
+            if bar.textView.isFirstResponder { bar.textView.resignFirstResponder() }
+            resignFirstResponder()
+        }
+        lastOverlap = -1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in self?.reportOverlap() }
+    }
+
+    // Tapping the page or dragging the keyboard away can take the bar with it; put it back.
+    @objc private func keyboardDidHide() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self, self.barActive, !self.isFirstResponder, !self.bar.textView.isFirstResponder else { return }
+            self.becomeFirstResponder()
+        }
+        reportOverlap()
+    }
+
+    @objc private func keyboardFrameChanged() { reportOverlap() }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        reportOverlap()
+    }
+
+    /// Tells the page how much of its bottom edge the message box covers, so the last message stays visible.
+    private func reportOverlap() {
+        var overlap: CGFloat = 0
+        if barActive, bar.window != nil {
+            let f = bar.convert(bar.bounds, to: view)
+            overlap = max(0, webView.frame.maxY - f.minY)
+        }
+        guard abs(overlap - lastOverlap) > 0.5 else { return }
+        lastOverlap = overlap
+        js("window.__tkComposer && window.__tkComposer.overlap(\(Int(overlap.rounded())))")
     }
 
     private func share(filename: String, text: String) {
