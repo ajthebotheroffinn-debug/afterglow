@@ -54,10 +54,15 @@ let textSize = 15;
 try { const v = parseInt(localStorage.getItem('tk-text-size'), 10); if (SIZES.includes(v)) textSize = v; } catch (_) {}
 const applySize = () => document.documentElement.style.setProperty('--msg-size', textSize + 'px');
 applySize();
+// In the newer iPhone app the chat scrolls with iPhone's own scrolling, so the keyboard can follow
+// your finger down and spring back up (like Messages). Older app builds keep the in-page scroller.
+const NATIVE_SCROLL = !!window.TK_NATIVE_SCROLL;
+const docScroll = () => document.documentElement.classList.contains('docscroll');
+const chatScroller = () => docScroll() ? document.scrollingElement : $('#scroller');
 document.addEventListener('focusin', e => {
   if (e.target && e.target.id === 'say') {
     document.documentElement.classList.add('kb');
-    setTimeout(() => { const sc = $('#scroller'); if (sc) sc.scrollTop = sc.scrollHeight; }, 300);
+    setTimeout(() => { const sc = chatScroller(); if (sc) sc.scrollTop = sc.scrollHeight; }, 300);
   }
 });
 document.addEventListener('focusout', e => { if (e.target && e.target.id === 'say') document.documentElement.classList.remove('kb'); });
@@ -67,6 +72,7 @@ document.addEventListener('focusout', e => { if (e.target && e.target.id === 'sa
   let startY = null, lastY = null;
   const typing = () => document.activeElement && document.activeElement.id === 'say';
   document.addEventListener('touchstart', e => {
+    if (NATIVE_SCROLL) { startY = null; return; }   // the iPhone handles it
     if (!typing() || !e.target.closest || !e.target.closest('#scroller, .composer')) { startY = null; return; }
     startY = lastY = e.touches[0].clientY;
   }, { passive: true });

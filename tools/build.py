@@ -16,7 +16,7 @@ if '--artifact' in sys.argv:
 platform = (src / 'platform.js').read_text()
 title = re.search(r'<title>.*?</title>', app, re.S).group(0)
 app = app.replace(title, '', 1)
-reset = (":root{color-scheme:dark;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}"
+reset = (":root{color-scheme:dark;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}"
          "html,body{height:100%}body{margin:0;font:14px/1.4 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;"
          "-webkit-text-size-adjust:100%;overscroll-behavior:none}img{max-width:100%}[hidden]{display:none!important}"
          "*{-webkit-tap-highlight-color:transparent}")
