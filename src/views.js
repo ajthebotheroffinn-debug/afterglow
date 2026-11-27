@@ -5,6 +5,7 @@ function render() {
   const changed = state.lastKey !== undefined && state.lastKey !== key;
   const first = state.lastKey === undefined || state.lastKey === 'loading';
   state.lastKey = state.phase === 'ready' ? key : 'loading';
+  document.documentElement.classList.toggle('docscroll', NATIVE_SCROLL && state.view.name === 'story');
   paintBar();
   if (state.view.name === 'story') { mountStory(); paintStory(); } else { state.mounted = null; paintHome(); if (changed || first) animateItems(); }
   if (changed) { const v = $('#view'); v.classList.remove('view-in', 'view-back'); void v.offsetWidth; v.classList.add(key === 'home' ? 'view-back' : 'view-in'); }
@@ -106,13 +107,15 @@ function mountStory() {
     const hadFocus = document.activeElement === box;
     send(); if (hadFocus) box.focus({ preventScroll: true });
   });
-  v.append(h('div', { class: 'scroll chat', id: 'scroller' }, h('div', { class: 'msgs', id: 'msgs' })),
-    h('div', { class: 'composer' }, h('div', { class: 'cbox' }, box, sendBtn), h('div', { class: 'disclaimer' }, 'This is AI, not a human.')));
+  const composer = h('div', { class: 'composer' }, h('div', { class: 'cbox' }, box, sendBtn), h('div', { class: 'disclaimer' }, 'This is AI, not a human.'));
+  v.append(h('div', { class: 'scroll chat', id: 'scroller' }, h('div', { class: 'msgs', id: 'msgs' })), composer);
+  // The composer floats over the bottom of the page in the newer app; keep room for it under the last message.
+  try { new ResizeObserver(() => document.documentElement.style.setProperty('--composer-h', composer.offsetHeight + 'px')).observe(composer); } catch (_) {}
   state.forceBottom = true;
 }
 function autosize(el) {
-  el.style.height = '35px';
-  const want = Math.min(Math.max(el.scrollHeight, 35), 140);
+  el.style.height = '32px';
+  const want = Math.min(Math.max(el.scrollHeight, 32), 140);
   el.style.height = want + 'px';
   el.style.overflowY = el.scrollHeight > 140 ? 'auto' : 'hidden';
   updateSendBtn();
@@ -129,7 +132,7 @@ function updateSendBtn() {
 function paintStory() {
   if (state.view.name !== 'story') return;
   const s = get(state.view.id); const wrap = $('#msgs'); if (!s || !wrap) return;
-  const sc = $('#scroller'); const near = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 120;
+  const sc = chatScroller(); const near = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 120;
   wrap.textContent = '';
   if (!youName(s)) wrap.append(h('div', { class: 'banner' }, h('span', {}, 'Pick who you play in this story.'), h('button', { class: 'ghost', onclick: () => storySheet(s.id) }, 'Choose persona')));
   if (s.archivedCount) wrap.append(h('div', { class: 'older' }, `${s.archivedCount} earlier messages are archived. The story still remembers them.`));
@@ -163,7 +166,7 @@ function paintStory() {
 }
 function paintStream() {
   const el = $('#stream'); if (!el) return paintStory();
-  const sc = $('#scroller'); const near = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160;
+  const sc = chatScroller(); const near = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160;
   el.innerHTML = fmtAI(subst(state.streaming.text, get(state.streaming.id)));
   if (near) sc.scrollTop = sc.scrollHeight;
 }
