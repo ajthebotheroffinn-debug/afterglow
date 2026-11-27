@@ -80,8 +80,11 @@ final class InputBar: UIView, UITextViewDelegate {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    // Height comes from the constraints above, so the box can grow as you type.
-    override var intrinsicContentSize: CGSize { .zero }
+    // The bar's height follows the text: one line to start, growing line by line as you type (like Swerve),
+    // up to about six lines, then the text scrolls inside the box. iPhone adds the home-bar space below it.
+    override var intrinsicContentSize: CGSize {
+        CGSize(width: UIView.noIntrinsicMetric, height: (textHeight?.constant ?? 34) + 2 + 4 + 8)
+    }
 
     /// Clears the box (after sending).
     func clear() {
@@ -97,8 +100,11 @@ final class InputBar: UIView, UITextViewDelegate {
         if abs(textHeight.constant - h) > 0.5 {
             textHeight.constant = h
             invalidateIntrinsicContentSize()
+            superview?.setNeedsLayout()
+            UIView.animate(withDuration: 0.15) { self.superview?.layoutIfNeeded() }
             onHeightChange?()
         }
+        if tv.isScrollEnabled { tv.scrollRangeToVisible(tv.selectedRange) }
         if mode != "stop" { mode = tv.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "continue" : "go" }
     }
 
