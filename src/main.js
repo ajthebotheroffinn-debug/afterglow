@@ -99,7 +99,7 @@ function settingsSheet() {
     h('p', { class: 'sectionnote' }, P.native ? 'Everything is saved on this phone and backed up automatically to Files › On My iPhone › Afterglow.' : 'Everything is saved in this browser.'),
     h('div', { class: 'field' }, h('div', { class: 'row' }, h('button', { class: 'ghost', onclick: () => exportAll() }, 'Export backup'), h('button', { class: 'ghost', onclick: () => fileIn.click() }, 'Import backup')), fileIn, paste,
       h('button', { class: 'ghost', onclick: () => { if (paste.value.trim()) doImport(paste.value.trim()); } }, 'Import pasted backup'),
-      h('span', { class: 'hint' }, 'Importing replaces everything in the app with the backup.')),
+      h('span', { class: 'hint' }, 'Backups include your stories, characters, personas and model profiles. API keys are never saved in backups; after restoring on a new phone, re-enter any keys. Importing replaces everything in the app with the backup.')),
     h('h3', { class: 'section' }, 'App'),
     h('div', { class: 'field' }, h('button', { class: 'ghost', onclick: () => P.reload() }, 'Check for updates'), h('span', { class: 'hint' }, `Version ${P.version}. Updates download automatically when you open the app.`))
   ], [h('button', { class: 'ghost', onclick: closeSheet }, 'Close'), h('button', { class: 'primary', onclick: () => { grab(); store.active = sel; P.saveStore(store); closeSheet(); toast(`Saved. Using ${prof().name}.`); render(); } }, 'Use this profile')]);
@@ -117,7 +117,8 @@ function modelMenu() {
 async function exportAll() {
   const docs = {};
   for (const [id, v] of state.items) { const { id: _drop, ...rest } = v; docs[id] = rest; }
-  const json = JSON.stringify({ app: 'afterglow', version: 1, exportedAt: new Date().toISOString(), docs });
+  const models = STANDALONE ? window.TK_PLATFORM.backupProfiles() : undefined;   // model profiles, without API keys
+  const json = JSON.stringify({ app: 'afterglow', version: 1, exportedAt: new Date().toISOString(), docs, ...(models && models.profiles.length ? { models } : {}) });
   const name = `afterglow-backup-${new Date().toISOString().slice(0, 10)}.json`;
   if (downloads) {
     try { await downloads.save({ filename: name, data: json }); toast('Exported. Import this file in the app.'); return; }
@@ -130,7 +131,28 @@ async function exportAll() {
     setTimeout(() => { ta.focus(); ta.select(); }, 60);
   }
 }
+// One-time edits to the built-in Valerie characters already saved on the phone (only the exact
+// original wording is changed, so anything you edited yourself is left alone).
+const VAL_UPDATES = [
+  ['val20', [['21, a university junior studying photography', '20, a university sophomore studying photography'],
+    ['divorced during her sophomore year', 'divorced during her freshman year'],
+    ['falling for {{user}} sophomore year', 'falling for {{user}} freshman year'],
+    ['Started liking you sophomore year', 'Started liking you freshman year'],
+    ['"Val", 21, a university student', '"Val", 20, a university sophomore']]]
+];
+async function updateBuiltIns() {
+  for (const [flag, pairs] of VAL_UPDATES) {
+    if ((get('meta_presets') || {})[flag]) continue;
+    for (const cid of ['char_valerie', 'char_valerie_evo']) {
+      const c = get(cid); if (!c || !c.persona) continue;
+      let p = c.persona; for (const [a, b] of pairs) p = p.split(a).join(b);
+      if (p !== c.persona) await save(cid, { persona: p, updatedAt: Date.now() });
+    }
+    await (get('meta_presets') ? save('meta_presets', { [flag]: true }) : create('meta_presets', { kind: 'meta', [flag]: true }));
+  }
+}
 async function seedDefaults() {
+  await updateBuiltIns();
   const meta = get('meta_presets') || {};
   if (!meta.valerie && !get('story_valerie')) await seedPreset('valerie', false);
   if (!get('meta_presets')?.valerieEvo && !get('char_valerie_evo') && !state.seeding) {
