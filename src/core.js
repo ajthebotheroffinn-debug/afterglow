@@ -1,3 +1,6 @@
+// App version, shown at the top left of Settings. MAJOR.MINOR.PATCH:
+// big change = first number, new features = middle number, small fixes/tweaks = last number.
+const APP_VERSION = '1.4.0';
 const $ = s => document.querySelector(s);
 const h = (tag, props, ...kids) => {
   const el = document.createElement(tag);
