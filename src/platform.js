@@ -305,6 +305,14 @@
     await ready;
     for (const id of [...mem.keys()]) { mem.delete(id); await persist(id, undefined); }
     for (const [id, v] of Object.entries(docs)) { const val = clone(v); mem.set(id, val); await persist(id, val); }
+    // Model profiles come back too (a backup without them, like one from the Claude version, keeps your current ones).
+    // Backups never hold API keys, so any key already on this phone for the same profile is kept.
+    if (j.models && Array.isArray(j.models.profiles) && j.models.profiles.length) {
+      const keys = new Map(getStore().profiles.map(p => [p.id, p.apiKey]));
+      const st = clone(j.models);
+      st.profiles = st.profiles.map(p => ({ ...p, apiKey: p.apiKey || keys.get(p.id) || '' }));
+      saveStore(st);
+    }
     emit();
     return Object.keys(docs).length;
   }
@@ -323,6 +331,7 @@
   window.TK_PLATFORM = {
     version: VERSION, native: NATIVE, presets: PRESETS,
     getConfig, setConfig, isConfigured, budget, getStore, saveStore, setActive, newId,
+    backupProfiles: () => { const st = getStore(); st.profiles = st.profiles.map(({ apiKey, ...p }) => p); return st; },   // no API keys in backups
     test: async (cfg) => (await complete('Reply with just the word OK.', { maxTokens: 400, config: cfg })).text.slice(0, 80) || '(empty reply)',
     importJSON, exportAll: all,
     haptic: () => { if (NATIVE) post({ type: 'haptic' }); },
