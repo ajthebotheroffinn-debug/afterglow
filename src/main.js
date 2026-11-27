@@ -13,18 +13,62 @@ async function seedPreset(key, open) {
 }
 
 let downloads = null;
-// With the consistency check on, the reply still streams in word by word (dimmed, as a draft)
-// while it is written; the checked version replaces it when the check is done.
+// Story settings › "Your actions" and "Your speech": how much the story may write for your character.
+// 0 None · 1 A little · 2 Normal (default, no extra rule) · 3 A lot. Saved per story.
+const CTL_LEVELS = ['None', 'A little', 'Normal', 'A lot'];
+const ctlOf = s => ({ act: Number.isInteger(s && s.userAct) ? s.userAct : 2, speak: Number.isInteger(s && s.userSpeak) ? s.userSpeak : 2 });
+function userCtlRules(you, c) {
+  const r = [];
+  if (c.act === 0) r.push(`NEVER write ${you}'s actions, movements, expressions, thoughts, feelings or decisions. Do not describe what ${you} does, thinks or feels, not even small gestures. Only write the other characters and the world, and what ${you} can see and hear.`);
+  if (c.act === 1) r.push(`Barely write ${you}'s actions: at most one small gesture or reaction when the scene needs it. Never decide what ${you} does next, and never describe ${you}'s thoughts or feelings.`);
+  if (c.act === 3) r.push(`You may freely narrate what ${you} does, notices, thinks and feels, in detail, and move the scene forward with ${you}'s actions.`);
+  if (c.speak === 0) r.push(`NEVER write dialogue for ${you}. ${you} only says what the player writes in their own messages; do not invent, quote or paraphrase new lines for ${you}.`);
+  if (c.speak === 1) r.push(`Give ${you} at most one short line of dialogue, and only when it is clearly needed. Otherwise leave ${you}'s words to the player.`);
+  if (c.speak === 3) r.push(`You may write dialogue for ${you} freely and carry conversations forward in ${you}'s voice.`);
+  if (c.act < 2 || c.speak < 2) r.push(`Stop the reply at a moment where ${you} can respond, and leave ${you}'s response to the player.`);
+  return r;
+}
+// Old moments recalled from earlier in the story ride along with your newest message. Label them clearly as
+// the past, and say where the scene is now, so the model doesn't jump back to an old place (e.g. after a rewind).
+function anchorScene(input) {
+  if (!Array.isArray(input) || input.length < 2) return input;
+  const i = input.length - 1, last = input[i];
+  if (last.role !== 'user' || !/RECALLED MOMENTS|OLDER MEMORIES THAT MAY MATTER NOW/.test(last.content)) return input;
+  const out = input.slice();
+  out[i] = { ...last, content: last.content
+    .replace(/RECALLED MOMENTS \([^)]*\):/, 'OLD MOMENTS FROM EARLIER IN THE STORY (background only: these already happened, maybe somewhere else and with other people around; never move the scene back to them):')
+    + '\n\n(NOW: continue straight on from the latest messages above. Same place, same moment, same people present as at the end of the last reply.)' };
+  return out;
+}
+function withUserCtl(input) {
+  input = anchorScene(input);
+  const s = state.view.name === 'story' ? get(state.view.id) : null;
+  const c = ctlOf(s);
+  if (!Array.isArray(input) || !input.length || (c.act === 2 && c.speak === 2)) return input;
+  const you = youName(s) || 'the player';
+  const rules = userCtlRules(you, c); if (!rules.length) return input;
+  const out = input.map(m => ({ ...m }));
+  out[0].content += `\n\nHOW MUCH TO WRITE FOR ${you.toUpperCase()} (the player's character):\n- ` + rules.join('\n- ');
+  const strict = c.act < 2 || c.speak < 2;
+  if (strict) for (let i = out.length - 1; i > 0; i--) if (out[i].role === 'user') { out[i].content += `\n\n(Reminder: ${rules.slice(0, -1).join(' ')})`; break; }
+  return out;
+}
+// Wraps the model for story replies: applies the rules above, and with the consistency check on the reply
+// still streams in word by word (dimmed, as a draft) while it is written; the checked version replaces it.
 function streamDrafts(s) {
   if (!s) return s;
-  return Object.assign((input, opts = {}) => {
-    const on = opts.onText; if (!on) return s(input, opts);
-    return s(input, { ...opts, onText: u => {
+  const wrapped = Object.assign((input, opts = {}) => {
+    const on = opts.onText; if (!on) return debugCall('other', input, opts, () => s(input, opts));
+    const sent = withUserCtl(input);
+    return debugCall('reply', sent, opts, e => s(sent, { ...opts, onText: u => {
+      if (u.text && u.text.trim()) e.markFirst();
       on(u);
       const st = state.streaming;
       if (st && xcheck() && !st.phase) { st.text = u.text; st.draft = true; paintStream(); }
-    } });
+    } }));
   }, s);
+  if (s.json) wrapped.json = (input, opts) => debugCall('memory', input, opts, () => s.json(input, opts));
+  return wrapped;
 }
 // Reads a profile written out as text, e.g. one Claude gives you:
 //   Profile name: Rocinante 12B / Provider: LM Studio / Server address: https://... / Model name: ... / Context size: 32768
@@ -100,9 +144,10 @@ function settingsSheet(startAt) {
         navRow('set-go-active', 'In use', act ? act.name || 'Model' : 'None', () => open(() => profilePage(act.id))),
         navRow('set-go-profiles', 'All profiles', String(store.profiles.length), () => open(profilesPage))
       ], act ? [shortLabel(act.preset), act.model].filter(Boolean).join(' · ') : null),
-      group('Story', [toggleRow(h('input', { type: 'checkbox', id: 'set-timer', checked: replyTimerOn, onchange: e => setReplyTimer(e.target.checked) }),
-        'Reply timer', 'A small timer in the top right of the story. Starts when you send, stops when the reply is finished.')]),
-      group('Data', [navRow('set-go-backups', 'Backups', '', () => open(backupsPage))]),
+      group('Story', [
+        toggleRow(h('input', { type: 'checkbox', id: 'set-timer', checked: replyTimerOn, onchange: e => setReplyTimer(e.target.checked) }),
+          'Reply timer', 'A small timer in the top right of the story. Starts when you send, stops when the reply is finished.')]),
+      group('Data', [navRow('set-go-backups', 'Backups', '', () => open(backupsPage)), navRow('set-go-debug', 'Debug log', String(debugLog.length), () => open(() => debugPage(group)))]),
       group('About', [
         h('div', { class: 'srow' }, h('span', { class: 'slabel' }, 'Version'), h('span', { class: 'sdetail' }, APP_VERSION)),
         h('button', { class: 'srow nav accent', type: 'button', onclick: () => P.reload() }, 'Check for updates')

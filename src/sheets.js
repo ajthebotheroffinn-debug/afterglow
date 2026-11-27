@@ -122,10 +122,21 @@ function storySheet(id, preChars) {
     personas().map(p => h('label', {}, h('input', { type: 'radio', name: 's-persona', value: p.id, checked: curP === p.id, onchange: sync }), p.name + (p.isDefault ? ' (default)' : ''))),
     h('label', {}, h('input', { type: 'radio', name: 's-persona', value: 'custom', checked: curP === 'custom', onchange: sync }), 'Someone just for this story'));
   sync();
+  const cur = ctlOf(s);
+  const slider = (sid, label, val, hint) => {
+    const out = h('span', { class: 'lvl' }, CTL_LEVELS[val]);
+    const r = h('input', { type: 'range', id: sid, min: '0', max: '3', step: '1', value: String(val), 'aria-label': label,
+      oninput: e => { out.textContent = CTL_LEVELS[+e.target.value]; } });
+    return h('div', { class: 'field' }, h('label', { for: sid }, label, ' ', out), r,
+      h('div', { class: 'ticks' }, CTL_LEVELS.map(l => h('span', {}, l))), h('span', { class: 'hint' }, hint));
+  };
+  const actR = slider('s-act', 'Your actions', cur.act, 'How much the story writes what your character does, thinks and feels.');
+  const speakR = slider('s-speak', 'Your speech', cur.speak, 'How much the story writes lines for your character to say.');
   openSheet(id ? 'Story settings' : 'New story', [
     field('Title', title),
     h('div', { class: 'field' }, h('label', {}, 'You play as'), radios, h('span', { class: 'hint' }, 'Edit personas in the Personas tab on the main screen.')),
     customBox,
+    actR, speakR,
     h('div', { class: 'field' }, h('label', {}, 'Characters in this story'), checks),
     field('Scenario', scen, 'Where and when it starts, and what is going on.'),
     field('Pinned notes', pinned, 'Rules or facts the story must always follow.')
@@ -134,7 +145,7 @@ function storySheet(id, preChars) {
     h('div', { class: 'row' }, h('button', { class: 'ghost', onclick: closeSheet }, 'Cancel'),
       h('button', { class: 'primary', onclick: async () => {
         const picked = [...checks.querySelectorAll('input:checked')].map(x => x.value);
-        const data = { title: title.value.trim() || 'Untitled story', personaId: radios.querySelector('input:checked')?.value || 'custom', userName: uname.value.trim(), chars: picked, you: you.value.trim(), scenario: scen.value.trim(), pinned: pinned.value.trim(), updatedAt: Date.now() };
+        const data = { title: title.value.trim() || 'Untitled story', personaId: radios.querySelector('input:checked')?.value || 'custom', userName: uname.value.trim(), chars: picked, you: you.value.trim(), scenario: scen.value.trim(), pinned: pinned.value.trim(), userAct: +actR.querySelector('input').value, userSpeak: +speakR.querySelector('input').value, updatedAt: Date.now() };
         if (id) { await save(id, data); closeSheet(); render(); return; }
         const opening = picked.map(get).filter(c => c && c.greeting).map(c => ({ id: rid(), role: 'ai', text: picked.length > 1 ? `${c.name}: ${c.greeting}` : c.greeting, ts: Date.now() }));
         const nid = 'story_' + rid();
