@@ -229,7 +229,7 @@
       url = c.baseUrl.replace(/\/+$/, '') + '/chat/completions';
       headers = { 'content-type': 'application/json' };
       if (c.apiKey) headers.authorization = 'Bearer ' + c.apiKey;
-      if (c.preset === 'openrouter') { headers['HTTP-Referer'] = 'https://afterglow.app'; headers['X-Title'] = 'Afterglow'; }
+      if (c.preset === 'openrouter') { headers['HTTP-Referer'] = 'https://afterglow.app'; headers['X-Title'] = 'DreamScapes'; }
       body = { model: c.model, max_tokens: maxTokens, stream: true, messages: system ? [{ role: 'system', content: system }, ...messages] : messages };
       // Local servers can force valid JSON, which small models need for memory updates.
       if (opts.schema && (c.preset === 'lmstudio' || c.preset === 'ollama') && !opts.noSchema)
@@ -335,6 +335,7 @@
     test: async (cfg) => (await complete('Reply with just the word OK.', { maxTokens: 400, config: cfg })).text.slice(0, 80) || '(empty reply)',
     importJSON, exportAll: all,
     haptic: () => { if (NATIVE) post({ type: 'haptic' }); },
+    composerHeight: n => { if (NATIVE && n > 0) post({ type: 'composer', h: n }); },
     reload: () => { if (NATIVE) post({ type: 'reload' }); else location.reload(); }
   };
   const user = { id: async () => 'local', me: async () => ({ id: 'local', name: '' }), isOwner: async () => true, canEdit: async () => true };

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key><string>en</string>
-	<key>CFBundleDisplayName</key><string>Afterglow</string>
+	<key>CFBundleDisplayName</key><string>DreamScapes</string>
 	<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
@@ -31,6 +31,6 @@
 		<key>NSAllowsLocalNetworking</key><true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Afterglow connects to a model running on a computer on your Wi-Fi, like Ollama or LM Studio.</string>
+	<string>DreamScapes connects to a model running on a computer on your Wi-Fi, like Ollama or LM Studio.</string>
 </dict>
 </plist>

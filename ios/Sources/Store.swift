@@ -2,7 +2,7 @@ import Foundation
 
 /// Keeps every story, character, persona and memory as a JSON file on the phone.
 /// Files live in the app's Documents folder, which shows up in the Files app
-/// (On My iPhone › Afterglow), together with automatic daily backups.
+/// (On My iPhone › DreamScapes), together with automatic daily backups.
 final class Store {
     static let shared = Store()
 
@@ -95,7 +95,7 @@ final class Store {
             let body = "{\"app\":\"afterglow\",\"version\":1,\"exportedAt\":\"\(ISO8601DateFormatter().string(from: Date()))\",\"docs\":" + self.readAll() + models + "}"
             let day = DateFormatter()
             day.dateFormat = "yyyy-MM-dd"
-            let url = self.backupDir.appendingPathComponent("afterglow-backup-\(day.string(from: Date())).json")
+            let url = self.backupDir.appendingPathComponent("dreamscapes-backup-\(day.string(from: Date())).json")
             try? body.data(using: .utf8)?.write(to: url, options: .atomic)
             let old = ((try? self.fm.contentsOfDirectory(at: self.backupDir, includingPropertiesForKeys: nil)) ?? [])
                 .filter { $0.pathExtension == "json" }

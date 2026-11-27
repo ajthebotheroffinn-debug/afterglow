@@ -2,7 +2,7 @@ import UIKit
 import WebKit
 import ObjectiveC
 
-/// Hosts the Afterglow page. The page itself lives online (GitHub Pages), so every change
+/// Hosts the DreamScapes page. The page itself lives online (GitHub Pages), so every change
 /// shows up the next time the app opens; a copy bundled in the app is used when offline.
 final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDelegate {
     private var webView: WKWebView!
@@ -143,7 +143,12 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         case "netCancel":
             if let id = msg["id"] as? String { net.cancel(id) }
         case "share":
-            share(filename: msg["filename"] as? String ?? "afterglow-backup.json", text: msg["data"] as? String ?? "")
+            share(filename: msg["filename"] as? String ?? "dreamscapes-backup.json", text: msg["data"] as? String ?? "")
+        case "composer":
+            // Start pulling the keyboard down as soon as the finger reaches the top of the message box.
+            if #available(iOS 17.0, *), let h = (msg["h"] as? NSNumber)?.doubleValue {
+                webView.scrollView.keyboardDismissPadding = CGFloat(h)
+            }
         case "haptic":
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         case "reload":
