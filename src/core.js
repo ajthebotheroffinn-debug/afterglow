@@ -1,6 +1,6 @@
 // App version, shown at the top left of Settings. MAJOR.MINOR.PATCH:
 // big change = first number, new features = middle number, small fixes/tweaks = last number.
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.8.0';
 const $ = s => document.querySelector(s);
 const h = (tag, props, ...kids) => {
   const el = document.createElement(tag);
@@ -60,6 +60,8 @@ applySize();
 // In the newer iPhone app the chat scrolls with iPhone's own scrolling, so the keyboard can follow
 // your finger down and spring back up (like Messages). Older app builds keep the in-page scroller.
 const NATIVE_SCROLL = !!window.TK_NATIVE_SCROLL;
+// Newer app builds draw the message box natively, attached to the keyboard (like Messages and Swerve).
+const NATIVE_COMPOSER = NATIVE_SCROLL && !!window.TK_NATIVE_COMPOSER;
 const docScroll = () => document.documentElement.classList.contains('docscroll');
 const chatScroller = () => docScroll() ? document.scrollingElement : $('#scroller');
 document.addEventListener('focusin', e => {

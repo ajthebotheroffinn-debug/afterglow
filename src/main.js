@@ -13,6 +13,19 @@ async function seedPreset(key, open) {
 }
 
 let downloads = null;
+// With the consistency check on, the reply still streams in word by word (dimmed, as a draft)
+// while it is written; the checked version replaces it when the check is done.
+function streamDrafts(s) {
+  if (!s) return s;
+  return Object.assign((input, opts = {}) => {
+    const on = opts.onText; if (!on) return s(input, opts);
+    return s(input, { ...opts, onText: u => {
+      on(u);
+      const st = state.streaming;
+      if (st && xcheck() && !st.phase) { st.text = u.text; st.draft = true; paintStream(); }
+    } });
+  }, s);
+}
 // Reads a profile written out as text, e.g. one Claude gives you:
 //   Profile name: Rocinante 12B / Provider: LM Studio / Server address: https://... / Model name: ... / Context size: 32768
 // One "Label: value" per line (JSON works too). Unknown lines are ignored.
@@ -87,6 +100,8 @@ function settingsSheet(startAt) {
         navRow('set-go-active', 'In use', act ? act.name || 'Model' : 'None', () => open(() => profilePage(act.id))),
         navRow('set-go-profiles', 'All profiles', String(store.profiles.length), () => open(profilesPage))
       ], act ? [shortLabel(act.preset), act.model].filter(Boolean).join(' · ') : null),
+      group('Story', [toggleRow(h('input', { type: 'checkbox', id: 'set-timer', checked: replyTimerOn, onchange: e => setReplyTimer(e.target.checked) }),
+        'Reply timer', 'A small timer in the top right of the story. Starts when you send, stops when the reply is finished.')]),
       group('Data', [navRow('set-go-backups', 'Backups', '', () => open(backupsPage))]),
       group('About', [
         h('div', { class: 'srow' }, h('span', { class: 'slabel' }, 'Version'), h('span', { class: 'sdetail' }, APP_VERSION)),
@@ -277,7 +292,7 @@ render();
   if (!C || !C.use) { state.phase = 'nodb'; render(); return; }
   const [d, u, s, dl] = await Promise.all([C.use('db'), C.use('user'), C.use('sample'), C.use('downloads')]);
   downloads = dl;
-  sample = s;
+  sample = streamDrafts(s);
   const uid = u ? await u.id() : null;
   if (!d || !uid) { state.phase = 'nodb'; render(); return; }
   db = d; col = db.collection('data/users/' + uid);
