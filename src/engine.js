@@ -67,6 +67,18 @@ function capMem(m, caps) {
   return { ...m, chapters: last(m.chapters, caps.chapters), people: last(m.people, caps.people), world: last(m.world, caps.world),
     invented: last(m.invented, caps.invented), threads: last(m.threads, caps.threads), revealed: last(m.revealed, caps.revealed), growth: last(m.growth, caps.growth) };
 }
+/* Items a small model never saw are kept (not deleted) and put back in front of its update,
+   so switching to a smaller model never shrinks the story's memory. A bigger model sees them again. */
+const MEM_LISTS = ['chapters', 'people', 'world', 'invented', 'threads', 'revealed', 'growth'];
+function keepUnseen(next, full, shown) {
+  for (const k of MEM_LISTS) {
+    const hidden = full[k].slice(0, full[k].length - shown[k].length);
+    if (!hidden.length) continue;
+    const key = x => JSON.stringify(x);
+    const have = new Set(next[k].map(key));
+    next[k] = [...hidden.filter(x => !have.has(key(x))), ...next[k]].slice(-LIM[k]);
+  }
+}
 const isLong = c => budget() && tok(c.persona) > budget() * 0.18;
 const personaFor = c => (isLong(c) && c.shortPersona && c.shortFor === hashStr(c.persona || '')) ? c.shortPersona : (c.persona || '');
 async function ensureShort(s) {
@@ -89,18 +101,132 @@ ${c.persona}`, { cache: false, maxTokens: Math.round(words * 1.6) + 100 });
 /* Recall: search everything older than the recent window for moments that match what is happening now. */
 const STOP = new Set(("the and that with this from have were they them their what when your you she her his him for was are but not just like then than into about there would could been said says out too all its it's i'm you're don't didn't she'd he'd that's what's it’s i’m you’re don’t didn’t she’d that’s what’s one back over only even still again some more very really know think going get got make made want look looked looks did does doing").split(' '));
 const toks = t => (String(t).toLowerCase().match(/[a-z0-9'’]{3,}/g) || []).filter(w => !STOP.has(w));
-function recall(s) {
+function kwScores(texts, query) {
+  const qt = new Set(toks(query)); if (!qt.size) return texts.map(() => 0);
+  const df = new Map();
+  const sets = texts.map(t => { const ts = new Set(toks(t)); ts.forEach(w => df.set(w, (df.get(w) || 0) + 1)); return ts; });
+  const N = texts.length;
+  return sets.map(set => { let sc = 0; for (const w of qt) if (set.has(w)) sc += Math.log(1 + N / df.get(w)); return sc; });
+}
+function recallPool(s) {
   const msgs = s.messages || [];
   const older = msgs.slice(0, Math.max(0, msgs.length - (budget() ? 12 : CONTEXT_TURNS)));
-  const pool = [...archivesOf(s.id).flatMap(a => a.messages || []), ...older].filter(m => m && m.text);
-  if (pool.length < 3) return [];
-  const qt = new Set(toks(subst(msgs.slice(-2).map(m => m.text).join(' '), s)));
-  if (!qt.size) return [];
-  const df = new Map();
-  const sets = pool.map(m => { const ts = new Set(toks(subst(m.text, s))); ts.forEach(w => df.set(w, (df.get(w) || 0) + 1)); return ts; });
-  const N = pool.length;
-  return pool.map((m, i) => { let sc = 0; for (const w of qt) if (sets[i].has(w)) sc += Math.log(1 + N / df.get(w)); return { m, i, sc }; })
-    .filter(x => x.sc > 3).sort((a, b) => b.sc - a.sc).slice(0, RECALL_COUNT).sort((a, b) => a.i - b.i).map(x => x.m);
+  return [...archivesOf(s.id).flatMap(a => a.messages || []), ...older].filter(m => m && m.text);
+}
+const recallQuery = s => subst((s.messages || []).slice(-2).map(m => m.text).join(' '), s);
+// Normal mode: up to RECALL_COUNT older moments that share words with what is happening now.
+function recall(s) {
+  const pool = recallPool(s);
+  if (pool.length < 3) return { moments: [], facts: [] };
+  const sc = kwScores(pool.map(m => subst(m.text, s)), recallQuery(s));
+  const moments = pool.map((m, i) => ({ m, i, sc: sc[i] })).filter(x => x.sc > 3).sort((a, b) => b.sc - a.sc)
+    .slice(0, budget() ? 3 : RECALL_COUNT).sort((a, b) => a.i - b.i).map(x => x.m);
+  return { moments, facts: [] };
+}
+
+/* ---------- experimental memory mode ----------
+   Turned on per model profile. Recall grows with the model's context size, it also searches the
+   older memory facts that did not fit in the prompt, and it can match by meaning (not just shared
+   words) using an embedding model on the same server, like nomic-embed-text in LM Studio. */
+const profile = () => (sample && typeof sample.profile === 'function' ? sample.profile() : {}) || {};
+const xmem = () => !!profile().xmem;
+const LIST_LABEL = { chapters: 'earlier chapter', people: 'character fact', world: 'place or event', invented: 'their past', threads: 'open thread', revealed: 'secret already out', growth: 'how they changed' };
+function setAsideFacts(s) {
+  const full = mem(s), shown = capMem(full, memCaps()), out = [];
+  for (const k of MEM_LISTS) {
+    const hidden = full[k].slice(0, full[k].length - shown[k].length);
+    for (const x of hidden) out.push({ kind: LIST_LABEL[k], text: typeof x === 'string' ? x : `${x.title}: ${x.text}` });
+  }
+  return out;
+}
+const cosine = (a, b) => { let d = 0, x = 0, y = 0; for (let i = 0; i < a.length; i++) { d += a[i] * b[i]; x += a[i] * a[i]; y += b[i] * b[i]; } return d / (Math.sqrt(x * y) || 1); };
+let embedWarned = false;
+function allFacts(s) {
+  const m = mem(s), out = [];
+  for (const k of MEM_LISTS) for (const x of m[k]) out.push({ kind: LIST_LABEL[k], text: typeof x === 'string' ? x : `${x.title}: ${x.text}` });
+  for (const r of m.relationships) out.push({ kind: 'relationship', text: `${r.name}: ${r.status}` });
+  return out;
+}
+async function recallX(s, o = {}) {
+  const B = budget();
+  const nMoments = o.nMoments || (B ? Math.max(3, Math.min(8, Math.round(B / 5000))) : 6);
+  const nFacts = o.nFacts || (B ? Math.max(4, Math.min(12, Math.round(B / 3000))) : 10);
+  const pool = recallPool(s), facts = o.allFacts ? allFacts(s) : setAsideFacts(s);
+  if (pool.length + facts.length < 1) return { moments: [], facts: [] };
+  const query = o.query || recallQuery(s);
+  const mTexts = pool.map(m => subst(m.text, s)), fTexts = facts.map(f => subst(f.text, s));
+  let mScore = kwScores(mTexts, query).map(x => x / 10), fScore = kwScores(fTexts, query).map(x => x / 10);
+  const em = profile().embedModel;
+  if (em && sample.embed) {
+    try {
+      const vecs = await embedCached(em, [query, ...mTexts, ...fTexts]);
+      const q = vecs[0];
+      mScore = mScore.map((k, i) => cosine(q, vecs[1 + i]) + Math.min(0.15, k * 0.05));
+      fScore = fScore.map((k, i) => cosine(q, vecs[1 + mTexts.length + i]) + Math.min(0.15, k * 0.05));
+    } catch (e) {
+      if (!embedWarned) { embedWarned = true; toast('Meaning-based recall is off: the embedding model didn\'t answer. Check its name in Settings.'); }
+    }
+  }
+  const pick = (items, sc, n, min) => items.map((it, i) => ({ it, i, sc: sc[i] })).filter(x => x.sc > min).sort((a, b) => b.sc - a.sc).slice(0, n).sort((a, b) => a.i - b.i).map(x => x.it);
+  const min = em ? 0.45 : 0.3;
+  return { moments: pick(pool, mScore, nMoments, min), facts: pick(facts, fScore, nFacts, min) };
+}
+// Vectors are cached on the device (they only depend on the text), so each message is embedded once.
+const embMem = new Map();
+let embDb = null;
+const embOpen = () => embDb || (embDb = new Promise(res => {
+  try { const r = indexedDB.open('afterglow-embeddings', 1); r.onupgradeneeded = () => r.result.createObjectStore('v'); r.onsuccess = () => res(r.result); r.onerror = () => res(null); }
+  catch (_) { res(null); }
+}));
+const embGet = async k => { if (embMem.has(k)) return embMem.get(k); const d = await embOpen(); if (!d) return null;
+  return new Promise(res => { try { const q = d.transaction('v').objectStore('v').get(k); q.onsuccess = () => { if (q.result) embMem.set(k, q.result); res(q.result || null); }; q.onerror = () => res(null); } catch (_) { res(null); } }); };
+const embPut = async (k, v) => { embMem.set(k, v); const d = await embOpen(); if (!d) return; try { d.transaction('v', 'readwrite').objectStore('v').put(v, k); } catch (_) {} };
+async function embedCached(model, texts) {
+  const keys = texts.map((t, i) => (i === 0 ? 'q|' : 'd|') + model + '|' + t.length + '|' + hashStr(t));
+  const out = await Promise.all(keys.map(embGet));
+  const need = []; out.forEach((v, i) => { if (!v) need.push(i); });
+  for (let j = 0; j < need.length; j += 64) {
+    const batch = need.slice(j, j + 64);
+    const vecs = await sample.embed(batch.map(i => texts[i].slice(0, 2000)), { model, query: batch.map(i => i === 0) });
+    batch.forEach((i, n) => { out[i] = vecs[n]; embPut(keys[i], vecs[n]); });
+  }
+  return out;
+}
+const getRecall = async s => (xmem() ? recallX(s) : recall(s));
+
+/* Consistency check (experimental memory mode): after a reply is written, search the whole story and
+   memory using the reply itself, so anything a character brought up on their own gets checked too.
+   If something contradicts what is already established, the model fixes just that part. */
+const xcheck = () => xmem() && !!profile().xcheck;
+async function consistencyCheck(s, draft, signal) {
+  const B = budget();
+  const found = await recallX(s, { query: subst(draft, s), allFacts: true, nMoments: 4, nFacts: 16 });
+  if (!found.moments.length && !found.facts.length) return draft;
+  const you = youName(s) || 'the user';
+  const chars = (!B || B >= 16000) ? storyChars(s).map(c => `[${c.name}] ${personaFor(c)}`).join('\n\n') : '';
+  const recent = (s.messages || []).slice(-4).map(m => (m.role === 'user' ? `[${you}] ` : '[story] ') + subst(m.text, s)).join('\n\n');
+  const prompt = subst(`You are the continuity editor for an ongoing interactive story. Check the DRAFT of the next reply against what is already established.
+
+Only look for contradictions: wrong names, relationships, family members, past events, places, dates, objects, what a character already knows or has already revealed, or a character describing their own past differently than before. Do not judge style. New details that don't conflict are fine.
+
+If there is no contradiction, reply with exactly: OK
+If there is one, reply with the full corrected draft and nothing else: change as little as possible, keep the same voice, length and formatting, no notes or labels.
+${chars ? '\nCHARACTERS:\n' + chars + '\n' : ''}
+ESTABLISHED FACTS (true):
+${found.facts.map(f => `- (${f.kind}) ${f.text}`).join('\n') || '(none)'}
+
+EARLIER EXCERPTS FROM THE STORY (true):
+${found.moments.map(m => (m.role === 'user' ? `[${you}] ` : '[story] ') + m.text.slice(0, 700)).join('\n---\n') || '(none)'}
+
+LATEST MESSAGES:
+${recent}
+
+DRAFT:
+${draft}`, s);
+  const r = await sample(prompt, { cache: false, signal, maxTokens: B ? replyTokens(s) + 60 : 1500 });
+  let t = (r.text || '').trim().replace(/^(corrected|revised|fixed)( draft| reply)?:\s*/i, '');
+  if (!t || /^ok\b[.!]?$/i.test(t) || t.length < draft.length * 0.5) return draft;   // nothing wrong (or a confused answer)
+  return t;
 }
 
 /* ---------- prompts ---------- */
@@ -138,10 +264,10 @@ function evolvedBlock(s, you) {
 - Every few replies, reveal something new from their past or a new side of them.
 - If ${you} questions a memory they claimed, they can insist, laugh it off, or admit they made it up, whichever fits them.`;
 }
-function rules(s) {
+function rules(s, rec) {
   const cs = storyChars(s);
   const you = youName(s) || 'the user';
-  const recalled = recall(s);
+  const recalled = budget() ? null : (rec || recall(s));
   return subst([
     'You are the storyteller in an ongoing interactive story, written together with the user. You voice the narrator and every character listed below. The user writes as their own character.',
     cs.length ? 'CHARACTERS YOU PLAY:\n' + cs.map(c => `- ${c.name}: ${personaFor(c)}`).join('\n') : 'You play the narrator and any characters the scene needs.',
@@ -152,8 +278,7 @@ function rules(s) {
     (s.pinnedMsgs || []).length ? 'PINNED MOMENTS (the user marked these as important; never forget or contradict them):\n' +
       s.pinnedMsgs.map(p => '- ' + p.text.slice(0, 900)).join('\n---\n') : '',
     'STORY MEMORY. All of this already happened. Stay consistent with it, refer back to it naturally, and let characters remember it:\n\n' + memoryBlock(s),
-    recalled.length ? 'RECALLED MOMENTS (exact excerpts from earlier in the story that relate to what is happening now; use details from them if they fit):\n' +
-      recalled.slice(0, budget() ? 3 : 99).map(m => (m.role === 'user' ? `[${you}] ` : '[story] ') + m.text.slice(0, budget() ? 350 : 700)).join('\n---\n') : '',
+    recalled ? recalledBlock(recalled, you) : '',
     budget() ? compactRules(s, you) : `HOW TO REPLY:
 - Length: ${lenOf(s).prompt}. Use short paragraphs.
 - Style: present tense, second person. In narration, call ${you} "you" (She grabs your hand. She pokes your chest.). Narration is plain prose with no asterisks. Everything a character says goes in double quotes. Use *single asterisks* only to stress one word, like *terrified* or *album*.
@@ -172,6 +297,16 @@ function rules(s) {
     'The story continues now from the messages that follow.'
   ].filter(Boolean).join('\n\n'), s);
 }
+function recalledBlock(rec, you) {
+  const B = budget();
+  const len = !B || (xmem() && B >= 16000) ? 700 : 350;
+  const out = [];
+  if (rec.moments.length) out.push('RECALLED MOMENTS (exact excerpts from earlier in the story that relate to what is happening now; use details from them if they fit):\n' +
+    rec.moments.map(m => (m.role === 'user' ? `[${you}] ` : '[story] ') + m.text.slice(0, len)).join('\n---\n'));
+  if (rec.facts.length) out.push('OLDER MEMORIES THAT MAY MATTER NOW (from long-term story memory; true, keep consistent):\n' +
+    rec.facts.map(f => `- (${f.kind}) ${f.text}`).join('\n'));
+  return out.join('\n\n');
+}
 function compactRules(s, you) {
   return `HOW TO REPLY:
 - Length: ${lenOf(s).prompt}. Short paragraphs of 1 to 4 sentences.
@@ -183,16 +318,22 @@ function compactRules(s, you) {
 - ${you}'s lines marked "says out loud" are heard by everyone nearby. "[action/thought]" lines are actions, private thoughts or scene directions: others may notice visible actions but can never hear or know ${you}'s thoughts. Follow scene directions.
 - Never write ${you}'s words, thoughts or choices. Stay consistent with STORY MEMORY.`;
 }
-function buildInput(s) {
+function buildInput(s, rec) {
   const B = budget();
-  const sys = rules(s);
+  rec = rec || recall(s);
+  const sys = rules(s, rec);
   const turns = [{ role: 'user', content: sys }];
   const you = youName(s) || 'The player';
   let conv = (s.messages || []).slice(-CONTEXT_TURNS).filter(m => m.text && m.text.trim())
     .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.role === 'user' ? labelUser(subst(m.text, s), you) : subst(m.text, s) }));
+  // With a local model, older matching moments ride along with the newest message instead of the
+  // top of the prompt. The top then stays the same from reply to reply, and the server can skip
+  // re-reading it, which makes big models on a home PC much faster.
+  const block = B ? recalledBlock(rec, you) : '';
+  const note = block ? '\n\n(' + subst(block, s) + ')' : '';
   if (B) {
     // Keep as many recent messages as fit, newest first.
-    let room = B - tok(sys) - replyTokens(s) - 250;
+    let room = B - tok(sys) - tok(note) - replyTokens(s) - 250;
     const kept = [];
     for (let i = conv.length - 1; i >= 0; i--) {
       const t = tok(conv[i].content) + 6;
@@ -203,6 +344,7 @@ function buildInput(s) {
   }
   turns.push(...conv);
   if (turns[turns.length - 1].role !== 'user') turns.push({ role: 'user', content: '(Continue the story from here.)' });
+  if (note) { const last = turns[turns.length - 1]; turns[turns.length - 1] = { ...last, content: last.content + note }; }
   return turns;
 }
 function errorCopy(e) {
@@ -232,9 +374,17 @@ async function generate(id) {
   if (budget()) { await ensureShort(s); s = get(id) || s; }
   let text = '', failed = null;
   try {
-    const r = await sample(buildInput(s), { cache: false, signal: ctl.signal, ...(budget() ? { maxTokens: replyTokens(s) } : {}),
-      onText: u => { if (state.streaming) { state.streaming.text = u.text; paintStream(); } } });
+    const check = xcheck();
+    const rec = await getRecall(s);
+    const r = await sample(buildInput(s, rec), { cache: false, signal: ctl.signal, ...(budget() ? { maxTokens: replyTokens(s) } : {}),
+      onText: u => { if (state.streaming && !check) { state.streaming.text = u.text; paintStream(); } } });
     text = r.text;
+    if (check && text.trim()) {
+      // You only see the reply once it has been checked.
+      state.streaming.phase = 'checking'; paintStory();
+      try { text = await consistencyCheck(get(id) || s, text, ctl.signal); }
+      catch (e) { if (e && e.code === 'cancelled') failed = e; }
+    }
   } catch (e) { failed = e; text = e.code === 'refused' ? '' : (e.text || ''); }
   state.streaming = null;
   const now = get(id); if (!now) return paintStory();
@@ -291,6 +441,7 @@ async function updateMemory(id, manual, rewound) {
   if (!take) { if (manual) toast('Nothing to remember yet.'); return; }
   const you = youName(s) || 'the user';
   const B = budget(), caps = memCaps(), L = caps || LIM;
+  const full = mem(s), shown = capMem(full, caps);   // a small model only sees the newest part of each list
   if (B) await ensureShort(s);
   const parts = msgs.slice(-take).map(m => m.role === 'user' ? labelUser(subst(m.text, s), you) : '[story] ' + subst(m.text, s));
   const outTok = B ? Math.min(2400, Math.round(B * 0.3)) : 4096;
@@ -304,7 +455,7 @@ Scenario: ${s.scenario || '(none)'}
 Pinned by the user: ${s.pinned || '(none)'}
 
 CURRENT MEMORY (JSON):
-${JSON.stringify(capMem(mem(s), caps))}
+${JSON.stringify(shown)}
 
 NEWEST PART OF THE STORY (some of it may already be in memory):
 @@TRANSCRIPT@@
@@ -335,10 +486,11 @@ Reply with only the JSON object:
   state.memBusy.add(id); paintBar();
   try {
     const out = await sample.json(prompt, { cache: false, maxTokens: outTok, schema: MEM_SCHEMA });
-    const next = capMem(mem({ memory: out || {} }), caps);
+    const next = mem({ memory: out || {} });
     if (next.summary || next.people.length || next.relationships.length) {
       const cur = mem(get(id) || s);
       if (!next.chapters.length && cur.chapters.length) next.chapters = cur.chapters; // never lose old chapters
+      keepUnseen(next, full, shown);
       await save(id, { memory: next, sinceMemory: 0, memoryAt: Date.now() });
       if (manual) toast('Memory updated.');
       if (state.sheetFor === id) memorySheet(id);
