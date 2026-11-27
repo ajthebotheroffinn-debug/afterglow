@@ -26,6 +26,13 @@ function settingsSheet() {
   const key = input('set-key', { type: 'password' });
   const model = input('set-model');
   const ctx = input('set-ctx', { inputmode: 'numeric', placeholder: 'Leave blank for cloud models' });
+  const xm = h('input', { type: 'checkbox', id: 'set-xmem' });
+  const emb = input('set-emb', { placeholder: 'e.g. text-embedding-nomic-embed-text-v1.5' });
+  const xc = h('input', { type: 'checkbox', id: 'set-xcheck' });
+  const embBox = h('div', {}, h('div', { class: 'field' }, h('div', { class: 'checks' }, h('label', {}, xc, h('span', { class: 'pbody' }, h('span', {}, 'Consistency check'),
+      h('span', { class: 'hint', style: 'display:block' }, 'After each reply is written, searches the whole story and memory for anything it mentions and fixes contradictions before you see it. Replies take longer.'))))), field('Embedding model (optional)', emb, 'Lets recall find old scenes by meaning, not just matching words. In LM Studio, use the embedding model\'s exact name from /v1/models. Leave blank to match by words only.'));
+  const syncX = () => { embBox.hidden = !xm.checked; };
+  xm.addEventListener('change', syncX);
   const help = h('span', { class: 'hint' });
   const status = h('div', { class: 'note', 'aria-live': 'polite', hidden: true });
   const radios = h('div', { class: 'checks' });
@@ -34,17 +41,18 @@ function settingsSheet() {
   const presetOf = id => presets.find(x => x.id === id) || presets[0];
   // Copy what is on screen into the profile being edited.
   const grab = () => { const p = prof(); if (!p) return;
-    Object.assign(p, { name: pname.value.trim() || p.name || 'My model', kind: presetOf(p.preset).kind, baseUrl: base.value.trim().replace(/\/+$/, ''), apiKey: key.value.trim(), model: model.value.trim(), ctx: parseInt(ctx.value, 10) || 0 }); };
+    Object.assign(p, { name: pname.value.trim() || p.name || 'My model', kind: presetOf(p.preset).kind, baseUrl: base.value.trim().replace(/\/+$/, ''), apiKey: key.value.trim(), model: model.value.trim(), ctx: parseInt(ctx.value, 10) || 0, xmem: xm.checked, xcheck: xc.checked, embedModel: emb.value.trim() }); };
   const showProvider = () => {
     radios.textContent = '';
     const p = prof();
     presets.forEach(pr => radios.append(h('label', {}, h('input', { type: 'radio', name: 'set-preset', value: pr.id, checked: p.preset === pr.id,
-      onchange: () => { grab(); p.preset = pr.id; p.kind = pr.kind; p.baseUrl = pr.baseUrl; p.model = pr.model; p.ctx = pr.ctx || 0; load(); } }), pr.label)));
+      onchange: () => { grab(); p.preset = pr.id; p.kind = pr.kind; p.baseUrl = pr.baseUrl; p.model = pr.model; p.ctx = pr.ctx || 0; p.embedModel = pr.embedModel || ''; load(); } }), pr.label)));
     help.textContent = presetOf(p.preset).help || '';
   };
   const load = () => { const p = prof();
     pname.value = p.name || ''; base.value = p.baseUrl || ''; key.value = p.apiKey || ''; model.value = p.model || '';
     ctx.value = p.ctx ? String(p.ctx) : (p.ctx === undefined && presetOf(p.preset).ctx ? String(presetOf(p.preset).ctx) : '');
+    xm.checked = !!p.xmem; xc.checked = !!p.xcheck; emb.value = p.embedModel !== undefined ? p.embedModel : (presetOf(p.preset).embedModel || ''); syncX();
     status.hidden = true; showProvider(); showList(); };
   const showList = () => {
     plist.textContent = '';
@@ -80,6 +88,8 @@ function settingsSheet() {
     h('div', { class: 'field' }, h('label', { for: 'set-key' }, 'API key'), h('div', { class: 'row', style: 'flex-wrap:nowrap' }, h('div', { style: 'flex:1;min-width:0;display:flex' }, key), showKey), h('span', { class: 'hint' }, 'Stored only on this phone.')),
     field('Model name', model),
     field('Context size (tokens)', ctx, 'How much the model can read at once. For LM Studio or Ollama, use the same number as the model\'s context length (often 8192). The app fits the story, memory and character into it. Leave blank for Claude, Qwen or OpenRouter.'),
+    h('div', { class: 'field' }, h('div', { class: 'checks' }, h('label', {}, xm, h('span', { class: 'pbody' }, h('span', {}, 'Experimental memory mode'),
+      h('span', { class: 'hint', style: 'display:block' }, 'For local models. Pulls back more old scenes as the context size grows, searches older memories that didn\'t fit, and can match by meaning. Turn off to go back to normal.'))))), embBox,
     h('div', { class: 'field' }, h('button', { class: 'ghost', onclick: async () => {
       grab(); status.hidden = false; status.textContent = 'Testing…';
       try { const r = await P.test({ ...prof() }); status.textContent = 'Connected. The model said: ' + r; }
