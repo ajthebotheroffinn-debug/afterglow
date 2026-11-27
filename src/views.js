@@ -9,7 +9,32 @@ function render() {
   paintBar();
   if (state.view.name === 'story') { mountStory(); paintStory(); } else { state.mounted = null; paintHome(); if (changed || first) animateItems(); }
   if (changed) { const v = $('#view'); v.classList.remove('view-in', 'view-back'); void v.offsetWidth; v.classList.add(key === 'home' ? 'view-back' : 'view-in'); }
+  syncBar();
+  paintTimer();
 }
+// Messages to the iPhone app.
+const nativePost = m => { try { window.webkit.messageHandlers.tk.postMessage(m); } catch (_) {} };
+// The native message box shows on the story screen only, and steps aside while a sheet or menu is open.
+function syncBar() {
+  if (!NATIVE_COMPOSER) return;
+  const story = state.view.name === 'story';
+  document.documentElement.classList.toggle('nativebar', story);
+  nativePost({ type: 'bar', show: story && $('#sheet').hidden });
+}
+try { new MutationObserver(syncBar).observe($('#sheet'), { attributes: true, attributeFilter: ['hidden'] }); } catch (_) {}
+window.__tkComposer = {
+  press(text) {
+    if (state.streaming) { ctl?.abort(); return; }
+    const b = $('#say'); if (!b || state.view.name !== 'story') return;
+    b.value = String(text || ''); send();
+  },
+  focus() { setTimeout(() => { const sc = chatScroller(); if (sc) sc.scrollTop = sc.scrollHeight; }, 320); },
+  overlap(px) {
+    const sc = chatScroller(), near = sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 140;
+    document.documentElement.style.setProperty('--bar-overlap', (+px || 0) + 'px');
+    if (near) sc.scrollTop = sc.scrollHeight;
+  }
+};
 function animateItems() { document.querySelectorAll('#view .item').forEach((el, i) => { el.classList.add('enter'); el.style.animationDelay = Math.min(i, 10) * 35 + 'ms'; }); }
 function paintBar() {
   const bar = $('#bar'); bar.textContent = '';
@@ -132,11 +157,15 @@ function updateSendBtn() {
   const mode = state.streaming ? 'stop' : (box && box.value.trim() ? 'go' : 'continue');
   if (btn.dataset.mode === mode) return;
   btn.dataset.mode = mode;
+  if (NATIVE_COMPOSER) nativePost({ type: 'barMode', mode });
   btn.classList.toggle('go', mode === 'go');
   btn.innerHTML = mode === 'stop' ? STOP_SVG : mode === 'go' ? ARROW_SVG : SEND_SVG;
   btn.setAttribute('aria-label', mode === 'stop' ? 'Stop' : mode === 'go' ? 'Send' : 'Continue the story');
 }
 function paintStory() {
+  // Reply timer: starts when a reply begins, stops when it is done.
+  if (state.streaming && !state.streaming.timed) { state.streaming.timed = true; timerStart(); }
+  else if (!state.streaming && state.timer && !state.timer.end) timerStop();
   if (state.view.name !== 'story') return;
   const s = get(state.view.id); const wrap = $('#msgs'); if (!s || !wrap) return;
   const sc = chatScroller(); const near = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 120;
@@ -159,9 +188,11 @@ function paintStory() {
       : h('div', { class: 'mrow ai' + (isNew ? ' enter' : '') }, tile(charName, 'av'), el));
   });
   if (state.streaming && state.streaming.id === s.id) {
-    const el = h('div', { class: 'msg ai', id: 'stream' });
-    if (state.streaming.text) el.innerHTML = fmtAI(subst(state.streaming.text, s));
-    else {
+    const el = h('div', { class: 'msg ai' + (state.streaming.draft ? ' draft' : ''), id: 'stream' });
+    if (state.streaming.text) {
+      el.innerHTML = fmtAI(subst(state.streaming.text, s));
+      if (state.streaming.phase === 'checking') el.append(checkingLine());
+    } else {
       el.append(h('span', { class: 'typing', role: 'status', 'aria-label': state.streaming.phase === 'checking' ? 'Checking memory' : 'Writing' }, h('i'), h('i'), h('i')));
       if (state.streaming.phase === 'checking') el.append(h('span', { class: 'thinking', style: 'margin-left:8px;font-size:.85em' }, 'Checking memory…'));
     }
@@ -172,10 +203,60 @@ function paintStory() {
   if (near || state.forceBottom || state.streaming) { sc.scrollTop = sc.scrollHeight; state.forceBottom = false; }
 }
 function paintStream() {
+  const st = state.streaming; if (!st) return;
+  // A small tap on the phone when the reply starts coming in.
+  if (!st.buzzed && String(st.text || '').trim()) { st.buzzed = true; timerFirst(); if (window.TK_PLATFORM?.native) nativePost({ type: 'haptic', style: 'light' }); else try { navigator.vibrate && navigator.vibrate(8); } catch (_) {} }
   const el = $('#stream'); if (!el) return paintStory();
   const sc = chatScroller(); const near = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 160;
+  el.classList.toggle('draft', !!state.streaming.draft);
   el.innerHTML = fmtAI(subst(state.streaming.text, get(state.streaming.id)));
+  fadeWords(el, state.streaming);
+  if (state.streaming.phase === 'checking') el.append(checkingLine());
   if (near) sc.scrollTop = sc.scrollHeight;
+}
+const checkingLine = () => h('div', { class: 'checking' }, h('span', { class: 'typing', role: 'status', 'aria-label': 'Checking memory' }, h('i'), h('i'), h('i')), 'Checking memory…');
+// New words fade in one after another as they arrive, instead of popping in as a block.
+const WORD_GAP = 28, WORD_FADE = 320;
+function fadeWords(el, st) {
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const now = performance.now(); const times = st.wordTimes || (st.wordTimes = []);
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  let i = 0;
+  for (const n of nodes) {
+    const parts = n.textContent.split(/(\s+)/); let touched = false; const frag = document.createDocumentFragment();
+    for (const part of parts) {
+      if (!part) continue;
+      if (/^\s+$/.test(part)) { frag.append(part); continue; }
+      if (times[i] === undefined) times[i] = Math.max(now, (times[i - 1] || 0) + WORD_GAP);
+      const age = now - times[i];
+      if (age < WORD_FADE) { const w = h('span', { class: 'wf' }, part); w.style.animationDelay = (-age) + 'ms'; frag.append(w); touched = true; }
+      else frag.append(part);
+      i++;
+    }
+    if (touched) n.replaceWith(frag);
+  }
+  // keep the fade going smoothly between chunks
+  clearTimeout(st.fadeTimer);
+  if (times.length && times[times.length - 1] + WORD_FADE > now) st.fadeTimer = setTimeout(() => { if (state.streaming === st && $('#stream')) paintStream(); }, 60);
+}
+
+/* ---------- reply timer (Settings › Reply timer) ---------- */
+let replyTimerOn = false;
+try { replyTimerOn = localStorage.getItem('tk-reply-timer') === '1'; } catch (_) {}
+function setReplyTimer(on) { replyTimerOn = !!on; try { localStorage.setItem('tk-reply-timer', on ? '1' : '0'); } catch (_) {} paintTimer(); }
+function timerStart() { state.timer = { start: performance.now(), first: 0, end: 0 }; clearInterval(state.timerTick); state.timerTick = setInterval(paintTimer, 100); paintTimer(); }
+function timerFirst() { if (state.timer && !state.timer.first) state.timer.first = performance.now(); }
+function timerStop() { if (state.timer && !state.timer.end) state.timer.end = performance.now(); clearInterval(state.timerTick); paintTimer(); }
+function paintTimer() {
+  let el = $('#replytimer');
+  const show = replyTimerOn && state.view.name === 'story' && state.timer;
+  if (!show) { if (el) el.hidden = true; return; }
+  if (!el) { el = h('div', { id: 'replytimer', 'aria-live': 'off' }); document.body.append(el); }
+  const t = state.timer, s = ms => (ms / 1000).toFixed(1) + 's';
+  const total = (t.end || performance.now()) - t.start;
+  el.hidden = false; el.classList.toggle('running', !t.end);
+  el.textContent = t.end ? (t.first ? `${s(total)} · first word ${s(t.first - t.start)}` : s(total)) : s(total);
 }
 
 /* ---------- message actions ---------- */
@@ -221,6 +302,7 @@ function openMenu(menu) {
   const sh = readySheet(true);
   sh.append(menu); sh.hidden = false;
   sh.onclick = e => { if (e.target === sh) closeSheet(); };
+  syncBar();
   const first = menu.querySelector('button'); if (first) first.focus({ preventScroll: true });
 }
 function msgMenu(mid) {
