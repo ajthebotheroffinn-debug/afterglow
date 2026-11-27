@@ -22,17 +22,18 @@ function settingsSheet() {
   const base = h('input', { id: 'set-base', value: cfg.baseUrl || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', inputmode: 'url' });
   const key = h('input', { id: 'set-key', type: 'password', value: cfg.apiKey || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
   const model = h('input', { id: 'set-model', value: cfg.model || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
+  const ctx = h('input', { id: 'set-ctx', inputmode: 'numeric', autocomplete: 'off', placeholder: 'Leave blank for cloud models', value: cfg.ctx !== undefined && cfg.ctx !== null ? String(cfg.ctx || '') : (P.budget() ? String(P.budget()) : '') });
   const help = h('span', { class: 'hint' });
   const status = h('div', { class: 'note', 'aria-live': 'polite', hidden: true });
   const showKey = h('button', { class: 'ghost', type: 'button', onclick: () => { key.type = key.type === 'password' ? 'text' : 'password'; showKey.textContent = key.type === 'password' ? 'Show' : 'Hide'; } }, 'Show');
   const fill = (keepFields) => {
     const pr = presets.find(x => x.id === pick) || presets[0];
-    if (!keepFields) { base.value = pr.baseUrl; model.value = pr.model; }
+    if (!keepFields) { base.value = pr.baseUrl; model.value = pr.model; ctx.value = pr.ctx ? String(pr.ctx) : ''; }
     help.textContent = pr.help || '';
   };
   presets.forEach(pr => radios.append(h('label', {}, h('input', { type: 'radio', name: 'set-preset', value: pr.id, checked: pick === pr.id, onchange: () => { pick = pr.id; fill(false); } }), pr.label)));
   fill(!!cfg.baseUrl && cfg.preset === pick);
-  const current = () => ({ preset: pick, kind: (presets.find(x => x.id === pick) || presets[0]).kind, baseUrl: base.value.trim().replace(/\/+$/, ''), apiKey: key.value.trim(), model: model.value.trim() });
+  const current = () => ({ preset: pick, kind: (presets.find(x => x.id === pick) || presets[0]).kind, baseUrl: base.value.trim().replace(/\/+$/, ''), apiKey: key.value.trim(), model: model.value.trim(), ctx: parseInt(ctx.value, 10) || 0 });
   const fileIn = h('input', { type: 'file', id: 'set-import-file', accept: 'application/json,.json,text/plain', hidden: true });
   const paste = h('textarea', { id: 'set-import-text', rows: '3', placeholder: 'Or paste a backup here' });
   const doImport = async text => {
@@ -45,6 +46,7 @@ function settingsSheet() {
     field('Server address', base),
     h('div', { class: 'field' }, h('label', { for: 'set-key' }, 'API key'), h('div', { class: 'row', style: 'flex-wrap:nowrap' }, h('div', { style: 'flex:1;min-width:0;display:flex' }, key), showKey), h('span', { class: 'hint' }, 'Stored only on this phone.')),
     field('Model name', model),
+    field('Context size (tokens)', ctx, 'How much the model can read at once. For LM Studio or Ollama, use the same number as the model\'s context length (often 8192). The app fits the story, memory and character into it. Leave blank for Claude, Qwen or OpenRouter.'),
     h('div', { class: 'field' }, h('button', { class: 'ghost', onclick: async () => {
       P.setConfig(current()); status.hidden = false; status.textContent = 'Testing…';
       try { const r = await P.test(); status.textContent = 'Connected. The model said: ' + r; }

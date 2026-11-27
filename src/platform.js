@@ -77,9 +77,9 @@
       help: 'Get a key in Alibaba Cloud Model Studio. Try qwen-max for better writing.' },
     { id: 'openrouter', label: 'OpenRouter (any model)', kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'qwen/qwen-2.5-72b-instruct',
       help: 'One key for hundreds of models, including Qwen. Copy the exact model name from openrouter.ai.' },
-    { id: 'ollama', label: 'Ollama on my computer', kind: 'openai', baseUrl: 'http://192.168.1.10:11434/v1', model: 'qwen2.5:14b',
+    { id: 'ollama', label: 'Ollama on my computer', kind: 'openai', baseUrl: 'http://192.168.1.10:11434/v1', model: 'qwen2.5:14b', ctx: 8192,
       help: 'Replace the address with your computer’s local IP. Start Ollama with OLLAMA_HOST=0.0.0.0 so your phone can reach it. No key needed.' },
-    { id: 'lmstudio', label: 'LM Studio on my computer', kind: 'openai', baseUrl: 'http://192.168.1.10:1234/v1', model: 'qwen2.5-14b-instruct',
+    { id: 'lmstudio', label: 'LM Studio on my computer', kind: 'openai', baseUrl: 'http://192.168.1.10:1234/v1', model: 'qwen2.5-14b-instruct', ctx: 8192,
       help: 'Turn on "Serve on local network" in LM Studio and use your computer’s local IP. No key needed.' },
     { id: 'custom', label: 'Other (OpenAI-compatible)', kind: 'openai', baseUrl: 'https://', model: '',
       help: 'Any server that speaks the OpenAI chat format.' }
@@ -91,6 +91,13 @@
     if (NATIVE) post({ type: 'config', json: JSON.stringify(c) }); // kept by the app so it survives web data resets
   };
   if (NATIVE && window.TK_CONFIG && !localStorage.getItem(CFG_KEY)) { try { localStorage.setItem(CFG_KEY, JSON.stringify(window.TK_CONFIG)); } catch (_) {} }
+  // How many tokens the model can see at once. 0 means "large enough not to worry" (cloud models).
+  const budget = () => {
+    const c = getConfig();
+    if (c.ctx !== undefined && c.ctx !== null && c.ctx !== '') return Math.max(0, +c.ctx || 0);
+    const pr = PRESETS.find(x => x.id === c.preset);
+    return (pr && pr.ctx) || 0;
+  };
   const isConfigured = () => { const c = getConfig(); return !!(c.baseUrl && c.model && (c.apiKey || /^http:\/\//.test(c.baseUrl) || c.preset === 'ollama' || c.preset === 'lmstudio')); };
 
   // ---------------------------------------------------------------- network
@@ -156,7 +163,17 @@
     return { system, messages: merged };
   }
 
-  async function complete(input, opts = {}) {
+  // One request at a time. A computer running a local model shares its memory between requests,
+  // so a memory update and a reply at the same moment can both fail.
+  let chain = Promise.resolve();
+  function complete(input, opts = {}) {
+    const run = () => (opts.signal && opts.signal.aborted) ? Promise.reject({ code: 'cancelled' }) : completeNow(input, opts);
+    const p = chain.then(run, run);
+    chain = p.catch(() => {});
+    return p;
+  }
+
+  async function completeNow(input, opts = {}) {
     if (!isConfigured()) throw { code: 'no_provider' };
     const c = getConfig();
     const { system, messages } = shape(input);
@@ -173,6 +190,9 @@
       if (c.apiKey) headers.authorization = 'Bearer ' + c.apiKey;
       if (c.preset === 'openrouter') { headers['HTTP-Referer'] = 'https://afterglow.app'; headers['X-Title'] = 'Afterglow'; }
       body = { model: c.model, max_tokens: maxTokens, stream: true, messages: system ? [{ role: 'system', content: system }, ...messages] : messages };
+      // Local servers can force valid JSON, which small models need for memory updates.
+      if (opts.schema && (c.preset === 'lmstudio' || c.preset === 'ollama') && !opts.noSchema)
+        body.response_format = { type: 'json_schema', json_schema: { name: 'memory', strict: true, schema: opts.schema } };
     }
 
     let raw = '', buf = '', text = '', stopReason = '', streamErr = null;
@@ -204,7 +224,10 @@
     let status;
     try { status = await request(url, { method: 'POST', headers, body: JSON.stringify(body) }, onChunk, opts.signal); }
     catch (e) { if (e && e.code) { e.text = stripThink(text); throw e; } throw { code: 'network', message: String(e) }; }
-    if (status && (status < 200 || status >= 300)) throw errorFor(status, raw);
+    if (status && (status < 200 || status >= 300)) {
+      if (body.response_format && status >= 400 && status < 500 && status !== 401 && status !== 403 && !/context|token/i.test(raw)) return completeNow(input, { ...opts, noSchema: true });
+      throw errorFor(status, raw);
+    }
     if (streamErr) { streamErr.text = stripThink(text); throw streamErr.code ? streamErr : { code: 'server', message: String(streamErr) }; }
     if (!text) {
       // Some servers ignore stream:true and send a single JSON body.
@@ -220,13 +243,14 @@
 
   const sample = Object.assign((input, opts) => complete(input, opts), {
     json: async (input, opts = {}) => {
-      const r = await complete(input, { ...opts, maxTokens: 4096 });
+      const r = await complete(input, { maxTokens: 4096, ...opts });
       const t = r.text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
       const a = t.indexOf('{'), b = t.lastIndexOf('}');
       if (a < 0 || b <= a) throw { code: 'invalid_json' };
       try { return JSON.parse(t.slice(a, b + 1)); } catch (_) { throw { code: 'invalid_json' }; }
     },
-    limits: async () => ({ images: false })
+    limits: async () => ({ images: false }),
+    budget
   });
 
   // ---------------------------------------------------------------- files
@@ -255,7 +279,7 @@
   // ---------------------------------------------------------------- expose
   window.TK_PLATFORM = {
     version: VERSION, native: NATIVE, presets: PRESETS,
-    getConfig, setConfig, isConfigured,
+    getConfig, setConfig, isConfigured, budget,
     test: async () => (await complete('Reply with just the word OK.', { maxTokens: 400 })).text.slice(0, 80) || '(empty reply)',
     importJSON, exportAll: all,
     haptic: () => { if (NATIVE) post({ type: 'haptic' }); },
