@@ -13,97 +13,140 @@ async function seedPreset(key, open) {
 }
 
 let downloads = null;
-function settingsSheet() {
+function settingsSheet(startAt) {
   const P = window.TK_PLATFORM; if (!P) return;
   const presets = P.presets;
   const store = P.getStore();
   if (!store.profiles.length) { const pr = presets.find(x => x.id === 'lmstudio') || presets[0]; const n = { id: P.newId(), name: 'My model', preset: pr.id, kind: pr.kind, baseUrl: pr.baseUrl, apiKey: '', model: pr.model, ctx: pr.ctx || 0 }; store.profiles.push(n); store.active = n.id; }
-  let sel = store.active;
-  const prof = () => store.profiles.find(x => x.id === sel);
-  const input = (id, extra) => h('input', { id, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', ...extra });
-  const pname = input('set-pname', { maxlength: '40', autocapitalize: 'words', placeholder: 'e.g. Stheno 8B, Nemo 12B, Claude' });
-  const base = input('set-base', { inputmode: 'url' });
-  const key = input('set-key', { type: 'password' });
-  const model = input('set-model');
-  const ctx = input('set-ctx', { inputmode: 'numeric', placeholder: 'Leave blank for cloud models' });
-  const xm = h('input', { type: 'checkbox', id: 'set-xmem' });
-  const emb = input('set-emb', { placeholder: 'e.g. text-embedding-nomic-embed-text-v1.5' });
-  const xc = h('input', { type: 'checkbox', id: 'set-xcheck' });
-  const embBox = h('div', {}, h('div', { class: 'field' }, h('div', { class: 'checks' }, h('label', {}, xc, h('span', { class: 'pbody' }, h('span', {}, 'Consistency check'),
-      h('span', { class: 'hint', style: 'display:block' }, 'After each reply is written, searches the whole story and memory for anything it mentions and fixes contradictions before you see it. Replies take longer.'))))), field('Embedding model (optional)', emb, 'Lets recall find old scenes by meaning, not just matching words. In LM Studio, use the embedding model\'s exact name from /v1/models. Leave blank to match by words only.'));
-  const syncX = () => { embBox.hidden = !xm.checked; };
-  xm.addEventListener('change', syncX);
-  const help = h('span', { class: 'hint' });
-  const status = h('div', { class: 'note', 'aria-live': 'polite', hidden: true });
-  const radios = h('div', { class: 'checks' });
-  const plist = h('div', { class: 'checks' });
-  const showKey = h('button', { class: 'ghost', type: 'button', onclick: () => { key.type = key.type === 'password' ? 'text' : 'password'; showKey.textContent = key.type === 'password' ? 'Show' : 'Hide'; } }, 'Show');
   const presetOf = id => presets.find(x => x.id === id) || presets[0];
-  // Copy what is on screen into the profile being edited.
-  const grab = () => { const p = prof(); if (!p) return;
-    Object.assign(p, { name: pname.value.trim() || p.name || 'My model', kind: presetOf(p.preset).kind, baseUrl: base.value.trim().replace(/\/+$/, ''), apiKey: key.value.trim(), model: model.value.trim(), ctx: parseInt(ctx.value, 10) || 0, xmem: xm.checked, xcheck: xc.checked, embedModel: emb.value.trim() }); };
-  const showProvider = () => {
-    radios.textContent = '';
-    const p = prof();
-    presets.forEach(pr => radios.append(h('label', {}, h('input', { type: 'radio', name: 'set-preset', value: pr.id, checked: p.preset === pr.id,
-      onchange: () => { grab(); p.preset = pr.id; p.kind = pr.kind; p.baseUrl = pr.baseUrl; p.model = pr.model; p.ctx = pr.ctx || 0; p.embedModel = pr.embedModel || ''; load(); } }), pr.label)));
-    help.textContent = presetOf(p.preset).help || '';
+  const shortLabel = id => presetOf(id).label.replace(/\s*\(.*\)\s*$/, '');
+  const byId = id => store.profiles.find(x => x.id === id);
+  const persist = () => P.saveStore(store);
+
+  // ---- small building blocks: iOS-style grouped rows
+  const chev = () => { const s = h('span', { class: 'chev', 'aria-hidden': 'true' }); s.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>'; return s; };
+  const group = (title, rows, foot) => h('div', { class: 'sgroup-wrap' }, title ? h('h3', { class: 'section' }, title) : null, h('div', { class: 'sgroup' }, rows), foot ? h('p', { class: 'sectionnote sfoot' }, foot) : null);
+  const navRow = (id, label, detail, fn) => h('button', { class: 'srow nav', id, type: 'button', onclick: fn }, h('span', { class: 'slabel' }, label), h('span', { class: 'sdetail' }, detail || ''), chev());
+  const toggleRow = (input, label, hint) => h('label', { class: 'srow toggle' }, h('span', { class: 'pbody' }, h('span', { class: 'slabel' }, label), hint ? h('span', { class: 'shint' }, hint) : null), input, h('span', { class: 'switch', 'aria-hidden': 'true' }));
+
+  // ---- page navigation inside the sheet
+  const host = h('div', { class: 'spage' });
+  const done = h('button', { class: 'primary', onclick: () => { leave(); persist(); closeSheet(); render(); } }, 'Done');
+  openSheet('Settings', [host], [h('span'), done]);
+  const panel = host.closest('.panel'), title = panel.querySelector('h2'), ver = panel.querySelector('.ver');
+  const back = h('button', { class: 'sback', type: 'button', onclick: () => go(-1) }, chev(), 'Back');
+  title.before(back);
+  const stack = []; let leave = () => {};
+  function show(page, dir) {
+    leave(); leave = page.leave || (() => {});
+    host.replaceChildren(...page.body);
+    title.textContent = page.title;
+    back.hidden = stack.length < 2; if (ver) ver.hidden = stack.length > 1;
+    host.classList.remove('in-fwd', 'in-back'); void host.offsetWidth; host.classList.add(dir < 0 ? 'in-back' : 'in-fwd');
+    panel.scrollTop = 0;
+  }
+  const open = make => { stack.push(make); show(make(), 1); };
+  function go(d) { if (d < 0 && stack.length > 1) { stack.pop(); show(stack[stack.length - 1](), -1); } }
+
+  // ---- main page
+  const mainPage = () => {
+    const act = byId(store.active) || store.profiles[0];
+    return { title: 'Settings', body: [
+      group('Model', [
+        navRow('set-go-active', 'In use', act ? act.name || 'Model' : 'None', () => open(() => profilePage(act.id))),
+        navRow('set-go-profiles', 'All profiles', String(store.profiles.length), () => open(profilesPage))
+      ], act ? [shortLabel(act.preset), act.model].filter(Boolean).join(' · ') : null),
+      group('Data', [navRow('set-go-backups', 'Backups', '', () => open(backupsPage))]),
+      group('About', [
+        h('div', { class: 'srow' }, h('span', { class: 'slabel' }, 'Version'), h('span', { class: 'sdetail' }, APP_VERSION)),
+        h('button', { class: 'srow nav accent', type: 'button', onclick: () => P.reload() }, 'Check for updates')
+      ], 'Updates download automatically when you open the app.')
+    ] };
   };
-  const load = () => { const p = prof();
-    pname.value = p.name || ''; base.value = p.baseUrl || ''; key.value = p.apiKey || ''; model.value = p.model || '';
-    ctx.value = p.ctx ? String(p.ctx) : (p.ctx === undefined && presetOf(p.preset).ctx ? String(presetOf(p.preset).ctx) : '');
-    xm.checked = !!p.xmem; xc.checked = !!p.xcheck; emb.value = p.embedModel !== undefined ? p.embedModel : (presetOf(p.preset).embedModel || ''); syncX();
-    status.hidden = true; showProvider(); showList(); };
-  const showList = () => {
-    plist.textContent = '';
-    store.profiles.forEach(p => plist.append(h('label', {}, h('input', { type: 'radio', name: 'set-profile', value: p.id, checked: p.id === sel,
-      onchange: () => { grab(); sel = p.id; load(); } }),
-      h('span', { class: 'pbody' }, h('span', {}, p.name || 'Model', p.id === store.active ? h('span', { class: 'badge' }, 'In use') : null),
-        h('span', { class: 'hint', style: 'display:block' }, [presetLabelOf(p.preset), p.model].filter(Boolean).join(' · '))))));
+
+  // ---- list of profiles
+  const profilesPage = () => ({ title: 'Model profiles', body: [
+    h('p', { class: 'sectionnote' }, 'Save a profile for each model you try. Switch between them here or from the story menu.'),
+    group(null, store.profiles.map(p => h('button', { class: 'srow nav', type: 'button', onclick: () => open(() => profilePage(p.id)) },
+      h('span', { class: 'pbody' }, h('span', { class: 'slabel' }, p.name || 'Model', p.id === store.active ? h('span', { class: 'badge' }, 'In use') : null),
+        h('span', { class: 'shint' }, [shortLabel(p.preset), p.model].filter(Boolean).join(' · '))), chev()))),
+    h('div', { class: 'field', style: 'margin-top:12px' }, h('button', { class: 'ghost', type: 'button', onclick: () => {
+      const cur = byId(store.active) || store.profiles[0];
+      const n = { ...cur, id: P.newId(), name: (cur.name || 'Model') + ' copy' };
+      store.profiles.push(n); open(() => profilePage(n.id, true)); } }, '+ New profile'))
+  ] });
+
+  // ---- one profile
+  function profilePage(pid, fresh) {
+    const p = byId(pid); if (!p) return mainPage();
+    const input = (id, extra) => h('input', { id, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', ...extra });
+    const pname = input('set-pname', { maxlength: '40', autocapitalize: 'words', placeholder: 'e.g. Rocinante 12B', value: p.name || '' });
+    const base = input('set-base', { inputmode: 'url', value: p.baseUrl || '' });
+    const key = input('set-key', { type: 'password', value: p.apiKey || '' });
+    const model = input('set-model', { value: p.model || '' });
+    const ctx = input('set-ctx', { inputmode: 'numeric', placeholder: 'Leave blank for cloud models',
+      value: p.ctx ? String(p.ctx) : (p.ctx === undefined && presetOf(p.preset).ctx ? String(presetOf(p.preset).ctx) : '') });
+    const xm = h('input', { type: 'checkbox', id: 'set-xmem', checked: !!p.xmem });
+    const xc = h('input', { type: 'checkbox', id: 'set-xcheck', checked: !!p.xcheck });
+    const emb = input('set-emb', { placeholder: 'e.g. text-embedding-nomic-embed-text-v1.5', value: p.embedModel !== undefined ? p.embedModel : (presetOf(p.preset).embedModel || '') });
+    const help = h('span', { class: 'hint' }, presetOf(p.preset).help || '');
+    const status = h('div', { class: 'note', 'aria-live': 'polite', hidden: true });
+    const grab = () => Object.assign(p, { name: pname.value.trim() || p.name || 'My model', kind: presetOf(p.preset).kind, baseUrl: base.value.trim().replace(/\/+$/, ''),
+      apiKey: key.value.trim(), model: model.value.trim(), ctx: parseInt(ctx.value, 10) || 0, xmem: xm.checked, xcheck: xc.checked, embedModel: emb.value.trim() });
+    const radios = h('div', { class: 'checks' }, presets.map(pr => h('label', {}, h('input', { type: 'radio', name: 'set-preset', value: pr.id, checked: p.preset === pr.id,
+      onchange: () => { p.preset = pr.id; p.kind = pr.kind; base.value = pr.baseUrl; model.value = pr.model; ctx.value = pr.ctx ? String(pr.ctx) : ''; emb.value = pr.embedModel || ''; help.textContent = pr.help || ''; } }), pr.label)));
+    const showKey = h('button', { class: 'ghost', type: 'button', onclick: () => { key.type = key.type === 'password' ? 'text' : 'password'; showKey.textContent = key.type === 'password' ? 'Show' : 'Hide'; } }, 'Show');
+    const xBox = h('div', { hidden: !xm.checked }, group(null, [toggleRow(xc, 'Consistency check', 'Checks each reply against the whole story before you see it and fixes contradictions. Slower.')]),
+      field('Embedding model (optional)', emb, 'Finds old scenes by meaning, not just matching words. Use the exact name from LM Studio\'s /v1/models. Leave blank to match by words.'));
+    xm.addEventListener('change', () => { xBox.hidden = !xm.checked; });
+    const inUse = store.active === p.id;
+    const useBtn = h('button', { class: 'primary', id: 'set-use', type: 'button', onclick: () => { grab(); store.active = p.id; persist(); closeSheet(); toast(`Saved. Using ${p.name}.`); render(); } }, inUse ? 'Save' : 'Use this profile');
+    const del = confirmBtn('Delete profile', () => {
+      if (store.profiles.length < 2) { toast('Keep at least one profile.'); return; }
+      store.profiles = store.profiles.filter(x => x.id !== p.id);
+      if (!store.profiles.some(x => x.id === store.active)) store.active = store.profiles[0].id;
+      persist(); leave = () => {}; go(-1); });
+    return { title: fresh ? 'New profile' : (p.name || 'Profile'), leave: grab, body: [
+      inUse ? h('div', { class: 'note' }, 'This profile is in use.') : null,
+      field('Profile name', pname),
+      h('h3', { class: 'section' }, 'Connection'),
+      h('div', { class: 'field' }, h('label', {}, 'Provider'), radios, help),
+      field('Server address', base),
+      h('div', { class: 'field' }, h('label', { for: 'set-key' }, 'API key'), h('div', { class: 'row', style: 'flex-wrap:nowrap' }, h('div', { style: 'flex:1;min-width:0;display:flex' }, key), showKey), h('span', { class: 'hint' }, 'Stored only on this phone. Never put in backups.')),
+      field('Model name', model),
+      field('Context size (tokens)', ctx, 'For LM Studio or Ollama, the same number as the model\'s context length. Leave blank for Claude, Qwen or OpenRouter.'),
+      h('div', { class: 'field' }, h('button', { class: 'ghost', type: 'button', onclick: async () => {
+        grab(); status.hidden = false; status.textContent = 'Testing…';
+        try { const r = await P.test({ ...p }); status.textContent = 'Connected. The model said: ' + r; }
+        catch (e) { status.textContent = errorCopy(e); } } }, 'Test connection'), status),
+      h('h3', { class: 'section' }, 'Memory'),
+      group(null, [toggleRow(xm, 'Experimental memory mode', 'For local models: pulls back more old scenes, searches older memories, can match by meaning.')]),
+      xBox,
+      h('div', { class: 'row sactions' }, useBtn, del)
+    ] };
+  }
+
+  // ---- backups
+  const backupsPage = () => {
+    const fileIn = h('input', { type: 'file', id: 'set-import-file', accept: 'application/json,.json,text/plain', hidden: true });
+    const paste = h('textarea', { id: 'set-import-text', rows: '3', placeholder: 'Or paste a backup here' });
+    const doImport = async text => {
+      try { const n = await P.importJSON(text); closeSheet(); state.view = { name: 'home' }; toast(`Imported ${n} items.`); }
+      catch (e) { toast('That file is not a DreamScapes backup.'); } };
+    fileIn.addEventListener('change', async () => { const f = fileIn.files && fileIn.files[0]; if (f) doImport(await f.text()); });
+    return { title: 'Backups', body: [
+      h('p', { class: 'sectionnote' }, P.native ? 'Everything is saved on this phone and backed up automatically every day to Files › On My iPhone › DreamScapes.' : 'Everything is saved in this browser.'),
+      group('Save', [h('button', { class: 'srow nav accent', type: 'button', onclick: () => exportAll() }, 'Export backup')],
+        'Includes your stories, characters, personas and model profiles. API keys are never included.'),
+      group('Restore', [h('button', { class: 'srow nav accent', type: 'button', onclick: () => fileIn.click() }, 'Import backup file')],
+        'Importing replaces everything in the app with the backup. Re-enter API keys afterwards if you\'re on a new phone.'),
+      fileIn,
+      h('div', { class: 'field' }, paste, h('button', { class: 'ghost', type: 'button', onclick: () => { if (paste.value.trim()) doImport(paste.value.trim()); } }, 'Import pasted backup'))
+    ] };
   };
-  const presetLabelOf = id => presetOf(id).label.replace(/\s*\(.*\)\s*$/, '');
-  const addBtn = h('button', { class: 'ghost', type: 'button', onclick: () => {
-    grab(); const cur = prof();
-    const n = { ...cur, id: P.newId(), name: (cur.name || 'Model') + ' copy' };
-    store.profiles.push(n); sel = n.id; load(); pname.focus(); pname.select(); } }, '+ New profile');
-  const delBtn = confirmBtn('Delete profile', () => {
-    if (store.profiles.length < 2) { toast('Keep at least one profile.'); return; }
-    store.profiles = store.profiles.filter(x => x.id !== sel);
-    if (!store.profiles.some(x => x.id === store.active)) store.active = store.profiles[0].id;
-    sel = store.active; P.saveStore(store); load(); });
-  const fileIn = h('input', { type: 'file', id: 'set-import-file', accept: 'application/json,.json,text/plain', hidden: true });
-  const paste = h('textarea', { id: 'set-import-text', rows: '3', placeholder: 'Or paste a backup here' });
-  const doImport = async text => {
-    try { const n = await P.importJSON(text); closeSheet(); state.view = { name: 'home' }; toast(`Imported ${n} items.`); }
-    catch (e) { toast('That file is not a DreamScapes backup.'); }
-  };
-  fileIn.addEventListener('change', async () => { const f = fileIn.files && fileIn.files[0]; if (f) doImport(await f.text()); });
-  openSheet('Settings', [
-    h('h3', { class: 'section', style: 'margin-top:0' }, 'Model profiles'),
-    h('p', { class: 'sectionnote' }, 'Save a profile for each model you try. Pick one and tap "Use this profile". You can also switch from the story menu.'),
-    h('div', { class: 'field' }, plist, h('div', { class: 'row' }, addBtn, delBtn)),
-    field('Profile name', pname),
-    h('div', { class: 'field' }, h('label', {}, 'Model'), radios, help),
-    field('Server address', base),
-    h('div', { class: 'field' }, h('label', { for: 'set-key' }, 'API key'), h('div', { class: 'row', style: 'flex-wrap:nowrap' }, h('div', { style: 'flex:1;min-width:0;display:flex' }, key), showKey), h('span', { class: 'hint' }, 'Stored only on this phone.')),
-    field('Model name', model),
-    field('Context size (tokens)', ctx, 'How much the model can read at once. For LM Studio or Ollama, use the same number as the model\'s context length (often 8192). The app fits the story, memory and character into it. Leave blank for Claude, Qwen or OpenRouter.'),
-    h('div', { class: 'field' }, h('div', { class: 'checks' }, h('label', {}, xm, h('span', { class: 'pbody' }, h('span', {}, 'Experimental memory mode'),
-      h('span', { class: 'hint', style: 'display:block' }, 'For local models. Pulls back more old scenes as the context size grows, searches older memories that didn\'t fit, and can match by meaning. Turn off to go back to normal.'))))), embBox,
-    h('div', { class: 'field' }, h('button', { class: 'ghost', onclick: async () => {
-      grab(); status.hidden = false; status.textContent = 'Testing…';
-      try { const r = await P.test({ ...prof() }); status.textContent = 'Connected. The model said: ' + r; }
-      catch (e) { status.textContent = errorCopy(e); }
-    } }, 'Test connection'), status),
-    h('h3', { class: 'section' }, 'Backups'),
-    h('p', { class: 'sectionnote' }, P.native ? 'Everything is saved on this phone and backed up automatically to Files › On My iPhone › DreamScapes.' : 'Everything is saved in this browser.'),
-    h('div', { class: 'field' }, h('div', { class: 'row' }, h('button', { class: 'ghost', onclick: () => exportAll() }, 'Export backup'), h('button', { class: 'ghost', onclick: () => fileIn.click() }, 'Import backup')), fileIn, paste,
-      h('button', { class: 'ghost', onclick: () => { if (paste.value.trim()) doImport(paste.value.trim()); } }, 'Import pasted backup'),
-      h('span', { class: 'hint' }, 'Backups include your stories, characters, personas and model profiles. API keys are never saved in backups; after restoring on a new phone, re-enter any keys. Importing replaces everything in the app with the backup.')),
-    h('h3', { class: 'section' }, 'App'),
-    h('div', { class: 'field' }, h('button', { class: 'ghost', onclick: () => P.reload() }, 'Check for updates'), h('span', { class: 'hint' }, `Version ${APP_VERSION}. Updates download automatically when you open the app.`))
-  ], [h('button', { class: 'ghost', onclick: closeSheet }, 'Close'), h('button', { class: 'primary', onclick: () => { grab(); store.active = sel; P.saveStore(store); closeSheet(); toast(`Saved. Using ${prof().name}.`); render(); } }, 'Use this profile')]);
-  load();
+
+  open(mainPage);
+  if (startAt === 'profiles') open(profilesPage);
 }
 function modelMenu() {
   const P = window.TK_PLATFORM; if (!P) return;
@@ -112,7 +155,7 @@ function modelMenu() {
     h('span', {}, p.name || 'Model'), h('span', { class: 'hint' }, p.id === st.active ? '✓' : ''));
   openMenu(h('div', { class: 'menu', role: 'menu', 'aria-label': 'Switch model' },
     h('div', { class: 'preview' }, 'Switch model'), ...st.profiles.map(item), h('div', { class: 'gap' }),
-    h('button', { role: 'menuitem', onclick: () => { closeSheet(); setTimeout(settingsSheet, 220); } }, h('span', {}, 'Edit profiles…'), icon('gear'))));
+    h('button', { role: 'menuitem', onclick: () => { closeSheet(); setTimeout(() => settingsSheet('profiles'), 220); } }, h('span', {}, 'Edit profiles…'), icon('gear'))));
 }
 async function exportAll() {
   const docs = {};
