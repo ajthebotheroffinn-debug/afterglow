@@ -77,9 +77,9 @@
       help: 'Get a key in Alibaba Cloud Model Studio. Try qwen-max for better writing.' },
     { id: 'openrouter', label: 'OpenRouter (any model)', kind: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: 'qwen/qwen-2.5-72b-instruct',
       help: 'One key for hundreds of models, including Qwen. Copy the exact model name from openrouter.ai.' },
-    { id: 'ollama', label: 'Ollama on my computer', kind: 'openai', baseUrl: 'http://192.168.1.10:11434/v1', model: 'qwen2.5:14b', ctx: 8192,
+    { id: 'ollama', label: 'Ollama on my computer', kind: 'openai', baseUrl: 'http://192.168.1.10:11434/v1', model: 'qwen2.5:14b', ctx: 8192, embedModel: 'nomic-embed-text',
       help: 'Replace the address with your computer’s local IP. Start Ollama with OLLAMA_HOST=0.0.0.0 so your phone can reach it. No key needed.' },
-    { id: 'lmstudio', label: 'LM Studio on my computer', kind: 'openai', baseUrl: 'http://192.168.1.10:1234/v1', model: 'qwen2.5-14b-instruct', ctx: 8192,
+    { id: 'lmstudio', label: 'LM Studio on my computer', kind: 'openai', baseUrl: 'http://192.168.1.10:1234/v1', model: 'qwen2.5-14b-instruct', ctx: 8192, embedModel: 'text-embedding-nomic-embed-text-v1.5',
       help: 'Turn on "Serve on local network" in LM Studio and use your computer’s local IP. No key needed.' },
     { id: 'custom', label: 'Other (OpenAI-compatible)', kind: 'openai', baseUrl: 'https://', model: '',
       help: 'Any server that speaks the OpenAI chat format.' }
@@ -192,11 +192,26 @@
   // One request at a time. A computer running a local model shares its memory between requests,
   // so a memory update and a reply at the same moment can both fail.
   let chain = Promise.resolve();
+  function serial(fn) { const p = chain.then(fn, fn); chain = p.catch(() => {}); return p; }
   function complete(input, opts = {}) {
-    const run = () => (opts.signal && opts.signal.aborted) ? Promise.reject({ code: 'cancelled' }) : completeNow(input, opts);
-    const p = chain.then(run, run);
-    chain = p.catch(() => {});
-    return p;
+    return serial(() => (opts.signal && opts.signal.aborted) ? Promise.reject({ code: 'cancelled' }) : completeNow(input, opts));
+  }
+
+  // Embeddings (for experimental memory mode): turns text into vectors so old scenes can be found by meaning.
+  async function embedNow(texts, opts = {}) {
+    const c = getConfig();
+    if (c.kind === 'anthropic' || !opts.model) throw { code: 'no_embed' };
+    const nomic = /nomic/i.test(opts.model);
+    const input = texts.map((t, i) => nomic ? ((opts.query && opts.query[i]) ? 'search_query: ' : 'search_document: ') + t : t);
+    const headers = { 'content-type': 'application/json' };
+    if (c.apiKey) headers.authorization = 'Bearer ' + c.apiKey;
+    let raw = '';
+    const status = await request(c.baseUrl.replace(/\/+$/, '') + '/embeddings', { method: 'POST', headers, body: JSON.stringify({ model: opts.model, input }) }, ch => { raw += ch; });
+    if (status && (status < 200 || status >= 300)) throw errorFor(status, raw);
+    const j = JSON.parse(raw);
+    const data = (j.data || []).slice().sort((a, b) => (a.index || 0) - (b.index || 0)).map(d => d.embedding);
+    if (data.length !== texts.length) throw { code: 'server', message: 'embedding count mismatch' };
+    return data;
   }
 
   async function completeNow(input, opts = {}) {
@@ -276,7 +291,9 @@
       try { return JSON.parse(t.slice(a, b + 1)); } catch (_) { throw { code: 'invalid_json' }; }
     },
     limits: async () => ({ images: false }),
-    budget
+    budget,
+    profile: () => getConfig(),
+    embed: (texts, opts) => serial(() => embedNow(texts, opts))
   });
 
   // ---------------------------------------------------------------- files
