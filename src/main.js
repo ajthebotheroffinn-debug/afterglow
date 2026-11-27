@@ -13,6 +13,37 @@ async function seedPreset(key, open) {
 }
 
 let downloads = null;
+// Reads a profile written out as text, e.g. one Claude gives you:
+//   Profile name: Rocinante 12B / Provider: LM Studio / Server address: https://... / Model name: ... / Context size: 32768
+// One "Label: value" per line (JSON works too). Unknown lines are ignored.
+function parseProfileText(text, presets) {
+  const out = {};
+  let obj = null;
+  try { const j = JSON.parse(text); if (j && typeof j === 'object') obj = j; } catch (_) {}
+  const pairs = obj ? Object.entries(obj).map(([k, v]) => [k, String(v)])
+    : String(text || '').split(/\r?\n/).map(l => l.replace(/^[\s*\-•>]+/, '').replace(/\*\*/g, '')).map(l => { const i = l.indexOf(':'); return i > 0 ? [l.slice(0, i), l.slice(i + 1)] : null; }).filter(Boolean);
+  const yes = v => /^(on|yes|true|enabled?|1)\b/i.test(v.trim());
+  for (let [k, v] of pairs) {
+    k = k.toLowerCase().replace(/[^a-z]/g, ''); v = v.trim().replace(/^[`"']+|[`"']+$/g, '');
+    if (!v && !/key/.test(k)) continue;
+    if (['name', 'profilename', 'profile'].includes(k)) out.name = v;
+    else if (['provider', 'preset', 'type', 'service'].includes(k)) {
+      const t = v.toLowerCase();
+      const pr = presets.find(x => x.id === t) || presets.find(x => t.includes(x.id)) ||
+        (/lm ?studio/.test(t) && presets.find(x => x.id === 'lmstudio')) || (/anthropic/.test(t) && presets.find(x => x.id === 'claude')) ||
+        (/other|openai|custom/.test(t) && presets.find(x => x.id === 'custom')) || presets.find(x => x.label.toLowerCase().startsWith(t));
+      if (pr) out.preset = pr.id;
+    }
+    else if (['serveraddress', 'address', 'server', 'baseurl', 'url', 'endpoint'].includes(k)) out.baseUrl = v.replace(/\/+$/, '');
+    else if (['apikey', 'key'].includes(k)) out.apiKey = /^(none|n\/a|-)$/i.test(v) ? '' : v;
+    else if (['model', 'modelname', 'modelid'].includes(k)) out.model = v;
+    else if (['context', 'contextsize', 'contextsizetokens', 'contextlength', 'ctx'].includes(k)) { const n = parseInt(v.replace(/[^\d]/g, ''), 10); if (n) out.ctx = n; }
+    else if (k.startsWith('experimentalmemory') || k === 'xmem') out.xmem = yes(v);
+    else if (k.startsWith('consistencycheck') || k === 'xcheck') out.xcheck = yes(v);
+    else if (k.startsWith('embedding') || k === 'embedmodel') out.embedModel = /^(none|off|-)$/i.test(v) ? '' : v;
+  }
+  return out;
+}
 function settingsSheet(startAt) {
   const P = window.TK_PLATFORM; if (!P) return;
   const presets = P.presets;
@@ -39,7 +70,7 @@ function settingsSheet(startAt) {
   const stack = []; let leave = () => {};
   function show(page, dir) {
     leave(); leave = page.leave || (() => {});
-    host.replaceChildren(...page.body);
+    host.replaceChildren(...page.body.filter(Boolean));
     title.textContent = page.title;
     back.hidden = stack.length < 2; if (ver) ver.hidden = stack.length > 1;
     host.classList.remove('in-fwd', 'in-back'); void host.offsetWidth; host.classList.add(dir < 0 ? 'in-back' : 'in-fwd');
@@ -73,8 +104,34 @@ function settingsSheet(startAt) {
     h('div', { class: 'field', style: 'margin-top:12px' }, h('button', { class: 'ghost', type: 'button', onclick: () => {
       const cur = byId(store.active) || store.profiles[0];
       const n = { ...cur, id: P.newId(), name: (cur.name || 'Model') + ' copy' };
-      store.profiles.push(n); open(() => profilePage(n.id, true)); } }, '+ New profile'))
+      store.profiles.push(n); open(() => profilePage(n.id, true)); } }, '+ New profile')),
+    group('Paste a profile', [h('button', { class: 'srow nav accent', id: 'set-paste-btn', type: 'button', onclick: async () => {
+      let t = '';
+      try { t = await navigator.clipboard.readText(); } catch (_) {}
+      if (t && applyPasted(t)) return;
+      pasteBox.hidden = false; pasteTa.focus(); } }, 'Paste from clipboard')],
+      'Copy a profile from Claude (lines like "Model name: ...") and tap Paste. It fills in everything; check it and tap Use this profile.'),
+    pasteBox
   ] });
+  const pasteTa = h('textarea', { id: 'set-paste-text', rows: '6', placeholder: 'Or paste it here' });
+  const pasteBox = h('div', { class: 'field', hidden: true }, pasteTa, h('button', { class: 'ghost', type: 'button', onclick: () => { if (!applyPasted(pasteTa.value)) toast('Couldn\'t find any profile settings in that.'); } }, 'Fill in profile'));
+  // Fills a profile from pasted text: updates the one with the same name, or makes a new one.
+  function applyPasted(text) {
+    const f = parseProfileText(text, presets);
+    if (!Object.keys(f).length) return false;
+    let p = f.name && store.profiles.find(x => (x.name || '').toLowerCase() === f.name.toLowerCase());
+    if (!p) {
+      const pr = presetOf(f.preset || 'custom');
+      p = { id: P.newId(), name: f.name || 'Pasted model', preset: pr.id, kind: pr.kind, baseUrl: pr.baseUrl, apiKey: '', model: pr.model, ctx: pr.ctx || 0, embedModel: pr.embedModel || '' };
+      store.profiles.push(p);
+    }
+    if (f.preset) { const pr = presetOf(f.preset); p.preset = pr.id; p.kind = pr.kind; }
+    Object.assign(p, f);
+    pasteTa.value = ''; pasteBox.hidden = true;
+    toast('Filled in. Check it, then tap Use this profile.');
+    open(() => profilePage(p.id));
+    return true;
+  }
 
   // ---- one profile
   function profilePage(pid, fresh) {
