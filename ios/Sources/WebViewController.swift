@@ -33,8 +33,12 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         webView.backgroundColor = .black
         webView.scrollView.backgroundColor = .black
         webView.scrollView.contentInsetAdjustmentBehavior = .never
-        webView.scrollView.bounces = false
-        webView.scrollView.isScrollEnabled = false
+        // The story page scrolls with iPhone's own scrolling. Dragging down through the chat pulls the
+        // keyboard down with your finger; let go early and it springs back up, like Messages.
+        webView.scrollView.bounces = true
+        webView.scrollView.alwaysBounceVertical = false
+        webView.scrollView.isScrollEnabled = true
+        webView.scrollView.showsVerticalScrollIndicator = false
         webView.scrollView.keyboardDismissMode = .interactive
         webView.allowsLinkPreview = false
         webView.navigationDelegate = self
@@ -72,7 +76,7 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
         ucc.removeAllUserScripts()
         let docs = Store.shared.snapshotJSON()
         let cfg = Store.shared.configJSON() ?? "null"
-        let src = "window.TK_BOOT = \(docs); window.TK_CONFIG = \(cfg.isEmpty ? "null" : cfg);"
+        let src = "window.TK_BOOT = \(docs); window.TK_CONFIG = \(cfg.isEmpty ? "null" : cfg); window.TK_NATIVE_SCROLL = true;"
         ucc.addUserScript(WKUserScript(source: src, injectionTime: .atDocumentStart, forMainFrameOnly: true))
     }
 

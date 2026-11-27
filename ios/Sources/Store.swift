@@ -67,7 +67,10 @@ final class Store {
     }
 
     func saveConfig(_ json: String) {
-        queue.async { try? json.data(using: .utf8)?.write(to: self.configURL, options: .atomic) }
+        queue.async {
+            try? json.data(using: .utf8)?.write(to: self.configURL, options: .atomic)
+            self.dirtySinceBackup = true
+        }
     }
 
     func configJSON() -> String? {
@@ -81,7 +84,15 @@ final class Store {
         queue.async {
             guard self.dirtySinceBackup else { return }
             self.dirtySinceBackup = false
-            let body = "{\"app\":\"afterglow\",\"version\":1,\"exportedAt\":\"\(ISO8601DateFormatter().string(from: Date()))\",\"docs\":" + self.readAll() + "}"
+            // Model profiles go in too, but never API keys.
+            var models = ""
+            if let cfg = self.configJSON(), let data = cfg.data(using: .utf8),
+               var obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+               let profiles = obj["profiles"] as? [[String: Any]] {
+                obj["profiles"] = profiles.map { p -> [String: Any] in var q = p; q.removeValue(forKey: "apiKey"); return q }
+                if let out = try? JSONSerialization.data(withJSONObject: obj), let s = String(data: out, encoding: .utf8) { models = ",\"models\":" + s }
+            }
+            let body = "{\"app\":\"afterglow\",\"version\":1,\"exportedAt\":\"\(ISO8601DateFormatter().string(from: Date()))\",\"docs\":" + self.readAll() + models + "}"
             let day = DateFormatter()
             day.dateFormat = "yyyy-MM-dd"
             let url = self.backupDir.appendingPathComponent("afterglow-backup-\(day.string(from: Date())).json")
