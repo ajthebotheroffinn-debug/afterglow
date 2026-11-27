@@ -26,7 +26,7 @@ function paintBar() {
       h('button', { class: 'circle', 'aria-label': 'Story options', onclick: () => storyMenu(s.id) }, tile(cs[0]?.name || s.title)));
   } else {
     bar.className = 'bar home';
-    bar.append(h('h1', {}, 'Afterglow', h('span', { class: 'sub' }, 'Your stories, remembered')),
+    bar.append(h('h1', {}, 'DreamScapes', h('span', { class: 'sub' }, 'Your stories, remembered')),
       state.phase === 'ready' ? (STANDALONE ? h('button', { class: 'chip', onclick: () => settingsSheet() }, 'Settings') : h('button', { class: 'chip', onclick: exportAll }, 'Export for app')) : null);
   }
 }
@@ -67,7 +67,7 @@ function paintHome() {
     sc.append(h('div', { class: 'row', style: 'margin-bottom:12px' }, h('button', { class: 'primary', onclick: () => storySheet(null) }, '+ New story'),
       !get('story_valerie') ? h('button', { class: 'ghost', onclick: () => seedPreset('valerie', true) }, 'Add Valerie\'s story') : null));
     const list = stories();
-    if (!list.length) { sc.append(h('div', { class: 'empty' }, h('h2', {}, 'No stories yet'), h('p', {}, 'Start a story and Afterglow will remember what happens as it grows.'))); return; }
+    if (!list.length) { sc.append(h('div', { class: 'empty' }, h('h2', {}, 'No stories yet'), h('p', {}, 'Start a story and DreamScapes will remember what happens as it grows.'))); return; }
     sc.append(h('div', { class: 'list' }, list.map(s => {
       const last = (s.messages || []).slice(-1)[0];
       const n = (s.messages || []).length + (s.archivedCount || 0);
@@ -107,10 +107,17 @@ function mountStory() {
     const hadFocus = document.activeElement === box;
     send(); if (hadFocus) box.focus({ preventScroll: true });
   });
-  const composer = h('div', { class: 'composer' }, h('div', { class: 'cbox' }, box, sendBtn), h('div', { class: 'disclaimer' }, 'This is AI, not a human.'));
+  const cbox = h('div', { class: 'cbox' }, box, sendBtn);
+  const composer = h('div', { class: 'composer' }, cbox);
   v.append(h('div', { class: 'scroll chat', id: 'scroller' }, h('div', { class: 'msgs', id: 'msgs' })), composer);
-  // The composer floats over the bottom of the page in the newer app; keep room for it under the last message.
-  try { new ResizeObserver(() => document.documentElement.style.setProperty('--composer-h', composer.offsetHeight + 'px')).observe(composer); } catch (_) {}
+  // The composer floats over the bottom of the page in the newer app; keep room for it under the last message,
+  // and tell the iPhone where the message box starts so a downward drag grabs the keyboard from there.
+  try { new ResizeObserver(() => {
+    const sc = chatScroller(), near = sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 120;
+    document.documentElement.style.setProperty('--composer-h', composer.offsetHeight + 'px');
+    if (near) sc.scrollTop = sc.scrollHeight;
+    window.TK_PLATFORM?.composerHeight?.(Math.round(composer.getBoundingClientRect().bottom - cbox.getBoundingClientRect().top));
+  }).observe(composer); } catch (_) {}
   state.forceBottom = true;
 }
 function autosize(el) {

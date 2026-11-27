@@ -1,7 +1,7 @@
 /* ---------- sheets ---------- */
 function openSheet(title, body, foot) {
   const sh = readySheet(false);
-  const panel =h('div', { class: 'panel', role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, h('h2', {}, title), body, h('div', { class: 'foot' }, foot));
+  const panel =h('div', { class: 'panel', role: 'dialog', 'aria-modal': 'true', 'aria-label': title }, title === 'Settings' ? h('div', { class: 'ver' }, 'v' + APP_VERSION) : null, h('h2', {}, title), body, h('div', { class: 'foot' }, foot));
   sh.append(panel); sh.hidden = false;
   sh.onclick = e => { if (e.target === sh) closeSheet(); };
 }
