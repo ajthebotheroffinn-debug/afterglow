@@ -279,7 +279,8 @@ function rules(s, rec) {
       s.pinnedMsgs.map(p => '- ' + p.text.slice(0, 900)).join('\n---\n') : '',
     'STORY MEMORY. All of this already happened. Stay consistent with it, refer back to it naturally, and let characters remember it:\n\n' + memoryBlock(s),
     recalled ? recalledBlock(recalled, you) : '',
-    budget() ? compactRules(s, you) : `HOW TO REPLY:
+    // Small context (under 16K tokens): a short version of the rules. Bigger local models get the full style guide, like Claude does.
+    budget() && budget() < 16000 ? compactRules(s, you) : `HOW TO REPLY:
 - Length: ${lenOf(s).prompt}. Use short paragraphs.
 - Style: present tense, second person. In narration, call ${you} "you" (She grabs your hand. She pokes your chest.). Narration is plain prose with no asterisks. Everything a character says goes in double quotes. Use *single asterisks* only to stress one word, like *terrified* or *album*.
 - Rhythm: short paragraphs of 1 to 4 sentences. Narration carries as much as dialogue: precise small physical details (where hands are, what a thumb or a pinky does, a jaw tightening, ears going pink), charged pauses, and a touch of setting (a bell over a door, rain on a window). Use a fragment now and then for rhythm. Show feelings through specific actions instead of naming them.
@@ -294,9 +295,30 @@ function rules(s, rec) {
 - ${you}'s messages arrive split into lines. "says out loud" lines are spoken, and everyone nearby hears them. "[action/thought]" lines are ${you}'s actions, private thoughts and feelings, or directions for the scene. Other characters can notice visible actions and body language (blushing, laughing, moving), but they can NEVER hear, know, repeat, quote or react to ${you}'s thoughts or the words inside them. If a thought names something (like "indirect kiss"), no character may say it unless they come up with it on their own. When an [action/thought] line describes what other characters do or what happens next, treat it as ${you}'s direction and follow it.
 - Never write ${you}'s words, thoughts or choices.
 - Keep each character's voice, personality and history consistent with the memory above.`,
+    budget() && cs.some(c => /^val/i.test(c.name || '')) ? VAL_STYLE_SAMPLE : '',
     'The story continues now from the messages that follow.'
   ].filter(Boolean).join('\n\n'), s);
 }
+// Local models copy what they see far better than they follow descriptions, so Val's stories get one short sample
+// of the target voice and rhythm (Claude doesn't need it). It's marked as a sample, never to be reused.
+const VAL_STYLE_SAMPLE = `STYLE SAMPLE (shows the voice, rhythm and length to aim for; it is NOT part of the story: never reuse its words, events or details):
+Val doesn't look up from her phone when you sit down. She just slides her iced coffee across the table to you, the straw already bent the way you like it.
+
+"You're late."
+
+"Two minutes."
+
+"Mm. Two whole minutes." Her thumb keeps scrolling. Then it stops. "Chloe says you were talking to some girl outside the library."
+
+Her voice is light. Bored, almost. But her jaw does that thing.
+
+"She asked me for directions, Val."
+
+"Cute." She finally looks at you, eyes half-lidded, smirk already in place. "Did you give her directions to your heart too, or—"
+
+"Oh my god."
+
+She laughs, quiet and pleased with herself, and hooks her ankle around yours under the table like it's nothing.`;
 function recalledBlock(rec, you) {
   const B = budget();
   const len = !B || (xmem() && B >= 16000) ? 700 : 350;
