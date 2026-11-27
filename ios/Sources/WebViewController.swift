@@ -146,8 +146,10 @@ final class WebViewController: UIViewController, WKNavigationDelegate, WKUIDeleg
             share(filename: msg["filename"] as? String ?? "dreamscapes-backup.json", text: msg["data"] as? String ?? "")
         case "composer":
             // Start pulling the keyboard down as soon as the finger reaches the top of the message box.
-            if #available(iOS 17.0, *), let h = (msg["h"] as? NSNumber)?.doubleValue {
-                webView.scrollView.keyboardDismissPadding = CGFloat(h)
+            // Set through the runtime so the app still builds and runs where iOS doesn't offer this.
+            let sel = NSSelectorFromString("setKeyboardDismissPadding:")
+            if let h = msg["h"] as? NSNumber, webView.scrollView.responds(to: sel) {
+                webView.scrollView.setValue(CGFloat(h.doubleValue), forKey: "keyboardDismissPadding")
             }
         case "haptic":
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
