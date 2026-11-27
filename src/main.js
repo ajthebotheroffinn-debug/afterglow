@@ -15,25 +15,54 @@ async function seedPreset(key, open) {
 let downloads = null;
 function settingsSheet() {
   const P = window.TK_PLATFORM; if (!P) return;
-  const cfg = P.getConfig();
   const presets = P.presets;
-  let pick = cfg.preset || presets[0].id;
-  const radios = h('div', { class: 'checks' });
-  const base = h('input', { id: 'set-base', value: cfg.baseUrl || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', inputmode: 'url' });
-  const key = h('input', { id: 'set-key', type: 'password', value: cfg.apiKey || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
-  const model = h('input', { id: 'set-model', value: cfg.model || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
-  const ctx = h('input', { id: 'set-ctx', inputmode: 'numeric', autocomplete: 'off', placeholder: 'Leave blank for cloud models', value: cfg.ctx !== undefined && cfg.ctx !== null ? String(cfg.ctx || '') : (P.budget() ? String(P.budget()) : '') });
+  const store = P.getStore();
+  if (!store.profiles.length) { const pr = presets.find(x => x.id === 'lmstudio') || presets[0]; const n = { id: P.newId(), name: 'My model', preset: pr.id, kind: pr.kind, baseUrl: pr.baseUrl, apiKey: '', model: pr.model, ctx: pr.ctx || 0 }; store.profiles.push(n); store.active = n.id; }
+  let sel = store.active;
+  const prof = () => store.profiles.find(x => x.id === sel);
+  const input = (id, extra) => h('input', { id, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', ...extra });
+  const pname = input('set-pname', { maxlength: '40', autocapitalize: 'words', placeholder: 'e.g. Stheno 8B, Nemo 12B, Claude' });
+  const base = input('set-base', { inputmode: 'url' });
+  const key = input('set-key', { type: 'password' });
+  const model = input('set-model');
+  const ctx = input('set-ctx', { inputmode: 'numeric', placeholder: 'Leave blank for cloud models' });
   const help = h('span', { class: 'hint' });
   const status = h('div', { class: 'note', 'aria-live': 'polite', hidden: true });
+  const radios = h('div', { class: 'checks' });
+  const plist = h('div', { class: 'checks' });
   const showKey = h('button', { class: 'ghost', type: 'button', onclick: () => { key.type = key.type === 'password' ? 'text' : 'password'; showKey.textContent = key.type === 'password' ? 'Show' : 'Hide'; } }, 'Show');
-  const fill = (keepFields) => {
-    const pr = presets.find(x => x.id === pick) || presets[0];
-    if (!keepFields) { base.value = pr.baseUrl; model.value = pr.model; ctx.value = pr.ctx ? String(pr.ctx) : ''; }
-    help.textContent = pr.help || '';
+  const presetOf = id => presets.find(x => x.id === id) || presets[0];
+  // Copy what is on screen into the profile being edited.
+  const grab = () => { const p = prof(); if (!p) return;
+    Object.assign(p, { name: pname.value.trim() || p.name || 'My model', kind: presetOf(p.preset).kind, baseUrl: base.value.trim().replace(/\/+$/, ''), apiKey: key.value.trim(), model: model.value.trim(), ctx: parseInt(ctx.value, 10) || 0 }); };
+  const showProvider = () => {
+    radios.textContent = '';
+    const p = prof();
+    presets.forEach(pr => radios.append(h('label', {}, h('input', { type: 'radio', name: 'set-preset', value: pr.id, checked: p.preset === pr.id,
+      onchange: () => { grab(); p.preset = pr.id; p.kind = pr.kind; p.baseUrl = pr.baseUrl; p.model = pr.model; p.ctx = pr.ctx || 0; load(); } }), pr.label)));
+    help.textContent = presetOf(p.preset).help || '';
   };
-  presets.forEach(pr => radios.append(h('label', {}, h('input', { type: 'radio', name: 'set-preset', value: pr.id, checked: pick === pr.id, onchange: () => { pick = pr.id; fill(false); } }), pr.label)));
-  fill(!!cfg.baseUrl && cfg.preset === pick);
-  const current = () => ({ preset: pick, kind: (presets.find(x => x.id === pick) || presets[0]).kind, baseUrl: base.value.trim().replace(/\/+$/, ''), apiKey: key.value.trim(), model: model.value.trim(), ctx: parseInt(ctx.value, 10) || 0 });
+  const load = () => { const p = prof();
+    pname.value = p.name || ''; base.value = p.baseUrl || ''; key.value = p.apiKey || ''; model.value = p.model || '';
+    ctx.value = p.ctx ? String(p.ctx) : (p.ctx === undefined && presetOf(p.preset).ctx ? String(presetOf(p.preset).ctx) : '');
+    status.hidden = true; showProvider(); showList(); };
+  const showList = () => {
+    plist.textContent = '';
+    store.profiles.forEach(p => plist.append(h('label', {}, h('input', { type: 'radio', name: 'set-profile', value: p.id, checked: p.id === sel,
+      onchange: () => { grab(); sel = p.id; load(); } }),
+      h('span', { class: 'pbody' }, h('span', {}, p.name || 'Model', p.id === store.active ? h('span', { class: 'badge' }, 'In use') : null),
+        h('span', { class: 'hint', style: 'display:block' }, [presetLabelOf(p.preset), p.model].filter(Boolean).join(' · '))))));
+  };
+  const presetLabelOf = id => presetOf(id).label.replace(/\s*\(.*\)\s*$/, '');
+  const addBtn = h('button', { class: 'ghost', type: 'button', onclick: () => {
+    grab(); const cur = prof();
+    const n = { ...cur, id: P.newId(), name: (cur.name || 'Model') + ' copy' };
+    store.profiles.push(n); sel = n.id; load(); pname.focus(); pname.select(); } }, '+ New profile');
+  const delBtn = confirmBtn('Delete profile', () => {
+    if (store.profiles.length < 2) { toast('Keep at least one profile.'); return; }
+    store.profiles = store.profiles.filter(x => x.id !== sel);
+    if (!store.profiles.some(x => x.id === store.active)) store.active = store.profiles[0].id;
+    sel = store.active; P.saveStore(store); load(); });
   const fileIn = h('input', { type: 'file', id: 'set-import-file', accept: 'application/json,.json,text/plain', hidden: true });
   const paste = h('textarea', { id: 'set-import-text', rows: '3', placeholder: 'Or paste a backup here' });
   const doImport = async text => {
@@ -42,14 +71,18 @@ function settingsSheet() {
   };
   fileIn.addEventListener('change', async () => { const f = fileIn.files && fileIn.files[0]; if (f) doImport(await f.text()); });
   openSheet('Settings', [
+    h('h3', { class: 'section', style: 'margin-top:0' }, 'Model profiles'),
+    h('p', { class: 'sectionnote' }, 'Save a profile for each model you try. Pick one and tap "Use this profile". You can also switch from the story menu.'),
+    h('div', { class: 'field' }, plist, h('div', { class: 'row' }, addBtn, delBtn)),
+    field('Profile name', pname),
     h('div', { class: 'field' }, h('label', {}, 'Model'), radios, help),
     field('Server address', base),
     h('div', { class: 'field' }, h('label', { for: 'set-key' }, 'API key'), h('div', { class: 'row', style: 'flex-wrap:nowrap' }, h('div', { style: 'flex:1;min-width:0;display:flex' }, key), showKey), h('span', { class: 'hint' }, 'Stored only on this phone.')),
     field('Model name', model),
     field('Context size (tokens)', ctx, 'How much the model can read at once. For LM Studio or Ollama, use the same number as the model\'s context length (often 8192). The app fits the story, memory and character into it. Leave blank for Claude, Qwen or OpenRouter.'),
     h('div', { class: 'field' }, h('button', { class: 'ghost', onclick: async () => {
-      P.setConfig(current()); status.hidden = false; status.textContent = 'Testing…';
-      try { const r = await P.test(); status.textContent = 'Connected. The model said: ' + r; }
+      grab(); status.hidden = false; status.textContent = 'Testing…';
+      try { const r = await P.test({ ...prof() }); status.textContent = 'Connected. The model said: ' + r; }
       catch (e) { status.textContent = errorCopy(e); }
     } }, 'Test connection'), status),
     h('h3', { class: 'section' }, 'Backups'),
@@ -59,7 +92,17 @@ function settingsSheet() {
       h('span', { class: 'hint' }, 'Importing replaces everything in the app with the backup.')),
     h('h3', { class: 'section' }, 'App'),
     h('div', { class: 'field' }, h('button', { class: 'ghost', onclick: () => P.reload() }, 'Check for updates'), h('span', { class: 'hint' }, `Version ${P.version}. Updates download automatically when you open the app.`))
-  ], [h('button', { class: 'ghost', onclick: closeSheet }, 'Close'), h('button', { class: 'primary', onclick: () => { P.setConfig(current()); closeSheet(); toast('Saved.'); render(); } }, 'Save')]);
+  ], [h('button', { class: 'ghost', onclick: closeSheet }, 'Close'), h('button', { class: 'primary', onclick: () => { grab(); store.active = sel; P.saveStore(store); closeSheet(); toast(`Saved. Using ${prof().name}.`); render(); } }, 'Use this profile')]);
+  load();
+}
+function modelMenu() {
+  const P = window.TK_PLATFORM; if (!P) return;
+  const st = P.getStore();
+  const item = p => h('button', { role: 'menuitem', onclick: () => { P.setActive(p.id); closeSheet(); toast(`Using ${p.name}.`); render(); } },
+    h('span', {}, p.name || 'Model'), h('span', { class: 'hint' }, p.id === st.active ? '✓' : ''));
+  openMenu(h('div', { class: 'menu', role: 'menu', 'aria-label': 'Switch model' },
+    h('div', { class: 'preview' }, 'Switch model'), ...st.profiles.map(item), h('div', { class: 'gap' }),
+    h('button', { role: 'menuitem', onclick: () => { closeSheet(); setTimeout(settingsSheet, 220); } }, h('span', {}, 'Edit profiles…'), icon('gear'))));
 }
 async function exportAll() {
   const docs = {};

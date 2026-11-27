@@ -84,21 +84,47 @@
     { id: 'custom', label: 'Other (OpenAI-compatible)', kind: 'openai', baseUrl: 'https://', model: '',
       help: 'Any server that speaks the OpenAI chat format.' }
   ];
+  // Model settings are kept as named profiles, so you can switch models quickly.
+  // Stored as { profiles: [{ id, name, preset, kind, baseUrl, apiKey, model, ctx }], active: id }.
   const CFG_KEY = 'tk-model-config';
-  const getConfig = () => { try { return JSON.parse(localStorage.getItem(CFG_KEY)) || {}; } catch (_) { return {}; } };
-  const setConfig = c => {
-    try { localStorage.setItem(CFG_KEY, JSON.stringify(c)); } catch (_) {}
-    if (NATIVE) post({ type: 'config', json: JSON.stringify(c) }); // kept by the app so it survives web data resets
+  const newId = () => 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const presetLabel = id => ((PRESETS.find(x => x.id === id) || {}).label || 'Model').replace(/\s*\(.*\)\s*$/, '');
+  function normalize(raw) {
+    raw = raw && typeof raw === 'object' ? raw : {};
+    if (Array.isArray(raw.profiles)) {
+      const profiles = raw.profiles.filter(p => p && p.id);
+      return { profiles, active: profiles.some(p => p.id === raw.active) ? raw.active : (profiles[0] && profiles[0].id) || null };
+    }
+    if (!raw.baseUrl) return { profiles: [], active: null };            // older single-model settings
+    const one = { id: newId(), name: raw.model || presetLabel(raw.preset), preset: raw.preset, kind: raw.kind, baseUrl: raw.baseUrl, apiKey: raw.apiKey || '', model: raw.model || '' };
+    if (raw.ctx !== undefined) one.ctx = raw.ctx;
+    return { profiles: [one], active: one.id };
+  }
+  const getStore = () => { try { return normalize(JSON.parse(localStorage.getItem(CFG_KEY))); } catch (_) { return normalize(null); } };
+  const saveStore = st => {
+    const clean = normalize(clone(st));
+    try { localStorage.setItem(CFG_KEY, JSON.stringify(clean)); } catch (_) {}
+    if (NATIVE) post({ type: 'config', json: JSON.stringify(clean) }); // kept by the app so it survives web data resets
   };
-  if (NATIVE && window.TK_CONFIG && !localStorage.getItem(CFG_KEY)) { try { localStorage.setItem(CFG_KEY, JSON.stringify(window.TK_CONFIG)); } catch (_) {} }
+  const getConfig = () => { const st = getStore(); return st.profiles.find(p => p.id === st.active) || {}; };
+  const setConfig = c => {   // updates the active profile (or creates the first one)
+    const st = getStore();
+    const i = st.profiles.findIndex(p => p.id === st.active);
+    if (i < 0) { const n = { id: newId(), name: c.name || c.model || presetLabel(c.preset), ...c }; st.profiles.push(n); st.active = n.id; }
+    else st.profiles[i] = { ...st.profiles[i], ...c };
+    saveStore(st);
+  };
+  const setActive = id => { const st = getStore(); if (st.profiles.some(p => p.id === id)) { st.active = id; saveStore(st); } };
+  if (NATIVE && window.TK_CONFIG && !localStorage.getItem(CFG_KEY)) saveStore(window.TK_CONFIG);
+  try { const raw = JSON.parse(localStorage.getItem(CFG_KEY)); if (raw && !Array.isArray(raw.profiles)) saveStore(raw); } catch (_) {} // turn old settings into a profile once
   // How many tokens the model can see at once. 0 means "large enough not to worry" (cloud models).
-  const budget = () => {
-    const c = getConfig();
+  const budget = (cfg) => {
+    const c = cfg || getConfig();
     if (c.ctx !== undefined && c.ctx !== null && c.ctx !== '') return Math.max(0, +c.ctx || 0);
     const pr = PRESETS.find(x => x.id === c.preset);
     return (pr && pr.ctx) || 0;
   };
-  const isConfigured = () => { const c = getConfig(); return !!(c.baseUrl && c.model && (c.apiKey || /^http:\/\//.test(c.baseUrl) || c.preset === 'ollama' || c.preset === 'lmstudio')); };
+  const isConfigured = (cfg) => { const c = cfg || getConfig(); return !!(c.baseUrl && c.model && (c.apiKey || /^http:\/\//.test(c.baseUrl) || c.preset === 'ollama' || c.preset === 'lmstudio')); };
 
   // ---------------------------------------------------------------- network
   // In the app, requests go through the phone's own networking (no browser CORS limits, plain http
@@ -174,8 +200,8 @@
   }
 
   async function completeNow(input, opts = {}) {
-    if (!isConfigured()) throw { code: 'no_provider' };
-    const c = getConfig();
+    const c = opts.config || getConfig();
+    if (!isConfigured(c)) throw { code: 'no_provider' };
     const { system, messages } = shape(input);
     const maxTokens = opts.maxTokens || 2048;
     let url, headers, body;
@@ -279,8 +305,8 @@
   // ---------------------------------------------------------------- expose
   window.TK_PLATFORM = {
     version: VERSION, native: NATIVE, presets: PRESETS,
-    getConfig, setConfig, isConfigured, budget,
-    test: async () => (await complete('Reply with just the word OK.', { maxTokens: 400 })).text.slice(0, 80) || '(empty reply)',
+    getConfig, setConfig, isConfigured, budget, getStore, saveStore, setActive, newId,
+    test: async (cfg) => (await complete('Reply with just the word OK.', { maxTokens: 400, config: cfg })).text.slice(0, 80) || '(empty reply)',
     importJSON, exportAll: all,
     haptic: () => { if (NATIVE) post({ type: 'haptic' }); },
     reload: () => { if (NATIVE) post({ type: 'reload' }); else location.reload(); }
