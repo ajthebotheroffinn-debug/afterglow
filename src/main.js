@@ -75,7 +75,7 @@ function settingsSheet() {
   const paste = h('textarea', { id: 'set-import-text', rows: '3', placeholder: 'Or paste a backup here' });
   const doImport = async text => {
     try { const n = await P.importJSON(text); closeSheet(); state.view = { name: 'home' }; toast(`Imported ${n} items.`); }
-    catch (e) { toast('That file is not an Afterglow backup.'); }
+    catch (e) { toast('That file is not a DreamScapes backup.'); }
   };
   fileIn.addEventListener('change', async () => { const f = fileIn.files && fileIn.files[0]; if (f) doImport(await f.text()); });
   openSheet('Settings', [
@@ -96,12 +96,12 @@ function settingsSheet() {
       catch (e) { status.textContent = errorCopy(e); }
     } }, 'Test connection'), status),
     h('h3', { class: 'section' }, 'Backups'),
-    h('p', { class: 'sectionnote' }, P.native ? 'Everything is saved on this phone and backed up automatically to Files › On My iPhone › Afterglow.' : 'Everything is saved in this browser.'),
+    h('p', { class: 'sectionnote' }, P.native ? 'Everything is saved on this phone and backed up automatically to Files › On My iPhone › DreamScapes.' : 'Everything is saved in this browser.'),
     h('div', { class: 'field' }, h('div', { class: 'row' }, h('button', { class: 'ghost', onclick: () => exportAll() }, 'Export backup'), h('button', { class: 'ghost', onclick: () => fileIn.click() }, 'Import backup')), fileIn, paste,
       h('button', { class: 'ghost', onclick: () => { if (paste.value.trim()) doImport(paste.value.trim()); } }, 'Import pasted backup'),
       h('span', { class: 'hint' }, 'Backups include your stories, characters, personas and model profiles. API keys are never saved in backups; after restoring on a new phone, re-enter any keys. Importing replaces everything in the app with the backup.')),
     h('h3', { class: 'section' }, 'App'),
-    h('div', { class: 'field' }, h('button', { class: 'ghost', onclick: () => P.reload() }, 'Check for updates'), h('span', { class: 'hint' }, `Version ${P.version}. Updates download automatically when you open the app.`))
+    h('div', { class: 'field' }, h('button', { class: 'ghost', onclick: () => P.reload() }, 'Check for updates'), h('span', { class: 'hint' }, `Version ${APP_VERSION}. Updates download automatically when you open the app.`))
   ], [h('button', { class: 'ghost', onclick: closeSheet }, 'Close'), h('button', { class: 'primary', onclick: () => { grab(); store.active = sel; P.saveStore(store); closeSheet(); toast(`Saved. Using ${prof().name}.`); render(); } }, 'Use this profile')]);
   load();
 }
@@ -119,7 +119,7 @@ async function exportAll() {
   for (const [id, v] of state.items) { const { id: _drop, ...rest } = v; docs[id] = rest; }
   const models = STANDALONE ? window.TK_PLATFORM.backupProfiles() : undefined;   // model profiles, without API keys
   const json = JSON.stringify({ app: 'afterglow', version: 1, exportedAt: new Date().toISOString(), docs, ...(models && models.profiles.length ? { models } : {}) });
-  const name = `afterglow-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  const name = `dreamscapes-backup-${new Date().toISOString().slice(0, 10)}.json`;
   if (downloads) {
     try { await downloads.save({ filename: name, data: json }); toast('Exported. Import this file in the app.'); return; }
     catch (e) { if (e && e.code === 'declined') return; }
